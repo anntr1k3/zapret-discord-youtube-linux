@@ -60,30 +60,88 @@ check_dependencies() {
 
 # -----------------------------------------------------------------------------
 # Работа с конфигурацией
+# game filter ranges v1
+# ipset mode v1
+# active fakes v1
 # -----------------------------------------------------------------------------
 
-# Проверка существования conf.env и обязательных полей
+# Конфигурация — данные key=value, не исполняемый shell-код.
+valid_game_filter_ports() {
+    local value="$1" item first last
+    local -a items
+    [[ ${#value} -gt 0 && ${#value} -le 512 ]] || return 1
+    [[ "$value" =~ ^[1-9][0-9]{0,4}(-[1-9][0-9]{0,4})?(,[1-9][0-9]{0,4}(-[1-9][0-9]{0,4})?)*$ ]] || return 1
+    IFS=, read -r -a items <<< "$value"
+    [[ ${#items[@]} -le 128 ]] || return 1
+    for item in "${items[@]}"; do
+        first="${item%%-*}"
+        last="${item##*-}"
+        (( 10#$first <= 65535 && 10#$last <= 65535 && 10#$first <= 10#$last )) || return 1
+    done
+}
+
+read_config() {
+    local conf_file="$1"
+    local -n result="$2"
+    local -A values=()
+    local line key value backend_file backend_name found
+    local backend_dir="$(dirname "${BASH_SOURCE[0]}")/../firewall-backends"
+
+    [[ -f "$conf_file" && -r "$conf_file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        [[ "$line" == *=* ]] || return 1
+        key="${line%%=*}"
+        value="${line#*=}"
+        case "$key" in
+            interface) [[ "$value" =~ ^[[:alnum:]_.:-]+$ ]] || return 1 ;;
+            gamefiltertcp|gamefilterudp) [[ "$value" == true || "$value" == false ]] || return 1 ;;
+            gamefiltertcp_ports|gamefilterudp_ports) valid_game_filter_ports "$value" || return 1 ;;
+            ipset_mode) [[ "$value" == legacy || "$value" == loaded || "$value" == none || "$value" == any ]] || return 1 ;;
+            fakediscord|fakegameudp) [[ -z "$value" || "$value" =~ ^[0-9a-f]{64}$ ]] || return 1 ;;
+            strategy) [[ "$value" =~ ^[[:alnum:]_][[:alnum:]_.-]*\.bat$ ]] || return 1 ;;
+            firewall_backend)
+                [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]] || return 1
+                if [[ "$value" != auto ]]; then
+                    found=false
+                    for backend_file in "$backend_dir"/*.sh; do
+                        backend_name="${backend_file##*/}"
+                        backend_name="${backend_name%.sh}"
+                        [[ "$backend_name" =~ ^[0-9][0-9]-(.*)$ ]] && backend_name="${BASH_REMATCH[1]}"
+                        [[ "$backend_name" == "$value" ]] && found=true
+                    done
+                    [[ "$found" == true ]] || return 1
+                fi
+                ;;
+            *) return 1 ;;
+        esac
+        [[ -z "${values[$key]+present}" ]] || return 1
+        values["$key"]="$value"
+    done < "$conf_file"
+
+    for key in interface gamefiltertcp gamefilterudp strategy; do
+        [[ -n "${values[$key]:-}" ]] || return 1
+    done
+    result=()
+    for key in "${!values[@]}"; do
+        result["$key"]="${values[$key]}"
+    done
+    result[firewall_backend]="${values[firewall_backend]:-auto}"
+    result[gamefiltertcp_ports]="${values[gamefiltertcp_ports]:-1024-65535}"
+    result[gamefilterudp_ports]="${values[gamefilterudp_ports]:-1024-65535}"
+    result[ipset_mode]="${values[ipset_mode]:-legacy}"
+    result[fakediscord]="${values[fakediscord]:-}"
+    result[fakegameudp]="${values[fakegameudp]:-}"
+}
+
+# Проверка существования conf.env и обязательных полей без изменения файла
 # Использование: if check_conf_file "$CONF_FILE"; then ...
 check_conf_file() {
     local conf_file="${1:-$CONF_FILE}"
 
-    if [[ ! -f "$conf_file" ]]; then
-        return 1
-    fi
-
-    local required_fields=("interface" "gamefiltertcp" "gamefilterudp" "strategy")
-    for field in "${required_fields[@]}"; do
-        if ! grep -q "^${field}=[^[:space:]]" "$conf_file"; then
-            return 1
-        fi
-    done
-
-    # firewall_backend опционален — по умолчанию auto
-    if ! grep -q "^firewall_backend=" "$conf_file"; then
-        echo "firewall_backend=auto" >> "$conf_file"
-    fi
-
-    return 0
+    local -A config=()
+    read_config "$conf_file" config
 }
 
 # Загрузка конфигурации из файла
@@ -94,14 +152,19 @@ load_config() {
         handle_error "Файл конфигурации $conf_file не найден"
     fi
 
-    source "$conf_file"
-
-    if [[ -z "$interface" ]] || [[ -z "$gamefiltertcp" ]] || [[ -z "$gamefilterudp" ]] || [[ -z "$strategy" ]]; then
-        handle_error "Отсутствуют обязательные параметры в конфигурационном файле"
-    fi
-
-    # По умолчанию автоопределение бэкенда
-    FIREWALL_BACKEND="${firewall_backend:-auto}"
+    local -A config=()
+    read_config "$conf_file" config || handle_error "Некорректная конфигурация: $conf_file (ожидается key=value, не shell-код)"
+    interface="${config[interface]}"
+    gamefiltertcp="${config[gamefiltertcp]}"
+    gamefilterudp="${config[gamefilterudp]}"
+    gamefiltertcp_ports="${config[gamefiltertcp_ports]}"
+    gamefilterudp_ports="${config[gamefilterudp_ports]}"
+    ipset_mode="${config[ipset_mode]}"
+    fakediscord="${config[fakediscord]:-}"
+    fakegameudp="${config[fakegameudp]:-}"
+    strategy="${config[strategy]}"
+    firewall_backend="${config[firewall_backend]}"
+    FIREWALL_BACKEND="$firewall_backend"
 }
 
 # -----------------------------------------------------------------------------
@@ -109,16 +172,33 @@ load_config() {
 # -----------------------------------------------------------------------------
 
 check_nfqws_status() {
-    if pgrep -f "nfqws" >/dev/null; then
+    if [[ -n "$(get_nfqws_pids)" ]]; then
         echo "Демоны nfqws запущены."
     else
         echo "Демоны nfqws не запущены."
     fi
 }
 
-# Остановка всех процессов nfqws
+# Находим только процессы с нашим исполняемым файлом, а не совпадением argv.
+get_nfqws_pids() {
+    local expected pid executable
+    expected=$(realpath -- "$NFQWS_PATH") || return 1
+    while IFS= read -r pid; do
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        executable=$(elevate readlink -- "/proc/$pid/exe" 2>/dev/null) || continue
+        # После обновления бинарника Linux добавляет суффикс (deleted).
+        [[ "${executable% (deleted)}" == "$expected" ]] && printf '%s\n' "$pid"
+    done < <(pgrep -x nfqws || true)
+    return 0
+}
+
+# Не останавливаем другие установки nfqws.
 stop_nfqws() {
-    elevate pkill -f nfqws 2>/dev/null || true
+    local pid
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] || continue
+        elevate kill -TERM -- "$pid" 2>/dev/null || true
+    done < <(get_nfqws_pids)
 }
 
 # -----------------------------------------------------------------------------
@@ -206,12 +286,12 @@ ensure_config_exists() {
         else
             echo "Операция отменена."
             read -p "Нажмите Enter для продолжения..."
-            return 0
+            return 1
         fi
         # Перепроверяем конфигурацию
         if ! check_conf_file; then
             show_error "Файл конфигурации всё ещё некорректен. Операция отменена."
-            return 0
+            return 1
         fi
     fi
     return 0
@@ -308,6 +388,43 @@ get_strategy_path() {
 # Требует: USE_GAME_FILTER, GAME_FILTER_PORTS
 parse_bat_file() {
     local file="$1"
+    local tcp_range="${gamefiltertcp_ports:-1024-65535}" udp_range="${gamefilterudp_ports:-1024-65535}"
+    valid_game_filter_ports "$tcp_range" && valid_game_filter_ports "$udp_range" || handle_error "Некорректные порты Game Filter"
+    USE_SYNCED_STRATEGY=false
+    nfqws_argv=()
+    # active fakes v1: verify configured override files before use.
+    local fake_dir="${FAKE_DIR:-$BASE_DIR/fakes}"
+    local -a fake_args=()
+    if [[ -n "${fakediscord:-}" ]]; then
+        [[ "$(sha256sum -- "$fake_dir/ACTIVE_DISCORD_UDP.bin" 2>/dev/null | cut -d' ' -f1)" == "$fakediscord" ]] \
+            || handle_error "Активный fake-файл Discord UDP изменился; выберите его заново в настройках GUI"
+        fake_args+=(--fake-discord "$fake_dir/ACTIVE_DISCORD_UDP.bin")
+    fi
+    if [[ -n "${fakegameudp:-}" ]]; then
+        [[ "$(sha256sum -- "$fake_dir/ACTIVE_GAME_UDP.bin" 2>/dev/null | cut -d' ' -f1)" == "$fakegameudp" ]] \
+            || handle_error "Активный fake-файл GameFilter UDP изменился; выберите его заново в настройках GUI"
+        fake_args+=(--fake-gameudp "$fake_dir/ACTIVE_GAME_UDP.bin")
+    fi
+    # synchronized profile runtime v1
+    # Only upstream files use the compiled catalog; never shadow a custom file.
+    if [[ "$(dirname -- "$file")" == "$REPO_DIR" && -f "$REPO_DIR/strategies.json" ]]; then
+        local output
+        output=$(python3 "$BASE_DIR/src/lib/strategy_sync.py" runtime \
+            --repo "$REPO_DIR" --strategy "${file##*/}" --user-lists "$USER_LISTS_DIR" \
+            --gamefiltertcp "${USE_GAME_FILTER_TCP:-false}" \
+            --gamefilterudp "${USE_GAME_FILTER_UDP:-false}" \
+            --gamefiltertcp-ports "$tcp_range" --gamefilterudp-ports "$udp_range" \
+            --ipset-mode "${ipset_mode:-legacy}" "${fake_args[@]}") || handle_error "Не удалось прочитать синхронизированную стратегию"
+        local -a fields
+        mapfile -t fields <<< "$output"
+        [[ ${#fields[@]} -gt 2 ]] || handle_error "Пустая синхронизированная стратегия"
+        tcp_ports="${fields[0]}"
+        udp_ports="${fields[1]}"
+        nfqws_argv=("${fields[@]:2}")
+        nfqws_params=()
+        USE_SYNCED_STRATEGY=true
+        return 0
+    fi
     local bin_path="bin/"
     debug_log "Parsing .bat file: $file"
 
@@ -320,18 +437,41 @@ parse_bat_file() {
     content="${content//%BIN%/$bin_path}"
     content="${content//%LISTS%/lists/}"
 
+    # В системной установке пользовательские списки живут вне версий кода.
+    if [[ "${SYSTEM_INSTALL:-false}" == true ]]; then
+        local list_path list_reference
+        for list_path in "$USER_LISTS_DIR"/*.txt; do
+            [[ -f "$list_path" ]] || continue
+            list_reference="lists/${list_path##*/}"
+            content="${content//"$list_reference"/$list_path}"
+        done
+    fi
+
+    if [[ "${ipset_mode:-legacy}" != legacy ]]; then
+        content=$(printf '%s' "$content" | python3 "$(dirname "${BASH_SOURCE[0]}")/ipset_mode.py" rewrite \
+            --mode "$ipset_mode" --repo "$REPO_DIR" --user-lists "$USER_LISTS_DIR") || handle_error "Не удалось применить режим IPSet"
+    fi
+
+    if [[ -n "${fakediscord:-}" || -n "${fakegameudp:-}" ]]; then
+        content=$(printf '%s' "$content" | python3 "$(dirname "${BASH_SOURCE[0]}")/fake_select.py" rewrite \
+            --repo "$REPO_DIR" --data "$(dirname -- "$fake_dir")" --discord "${fakediscord:-}" --gameudp "${fakegameudp:-}") \
+            || handle_error "Не удалось применить активные fakes"
+    fi
+
     # Обрабатываем GameFilter
     if [ "$USE_GAME_FILTER" = true ]; then
-        content="${content//%GameFilter%/$GAME_FILTER_PORTS}"
+        local generic_range="$udp_range"
+        [[ "$USE_GAME_FILTER_TCP" == true ]] && generic_range="$tcp_range"
+        content="${content//%GameFilter%/$generic_range}"
         #TCP and UDP
         if [ "$USE_GAME_FILTER_TCP" = true ]; then
-            content="${content//%GameFilterTCP%/$GAME_FILTER_PORTS}"
+            content="${content//%GameFilterTCP%/$tcp_range}"
         else
             content="${content//%GameFilterTCP%/$GAME_FILTER_OFF_PORTS}"
         fi
 
         if [ "$USE_GAME_FILTER_UDP" = true ]; then
-            content="${content//%GameFilterUDP%/$GAME_FILTER_PORTS}"
+            content="${content//%GameFilterUDP%/$udp_range}"
         else
             content="${content//%GameFilterUDP%/$GAME_FILTER_OFF_PORTS}"
         fi
@@ -409,9 +549,13 @@ start_nfqws() {
         --qnum="$NFT_QUEUE_NUM"
     )
 
-    for params in "${nfqws_params[@]}"; do
-        full_params+=($params)
-    done
+    if [[ "${USE_SYNCED_STRATEGY:-false}" == true ]]; then
+        full_params+=("${nfqws_argv[@]}")
+    else
+        for params in "${nfqws_params[@]}"; do
+            full_params+=($params)
+        done
+    fi
 
     debug_log "Запуск NFQWS с параметрами: ${full_params[@]}"
     elevate "${full_params[@]}" ||

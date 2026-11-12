@@ -3,17 +3,14 @@
 set -e
 
 # Константы путей
-HOME_DIR_PATH="$(realpath "$(dirname "$0")")"
-BASE_DIR="$HOME_DIR_PATH"
-CONF_FILE="$HOME_DIR_PATH/conf.env"
-CUSTOM_STRATEGIES_DIR="$HOME_DIR_PATH/custom-strategies"
-REPO_DIR="$HOME_DIR_PATH/zapret-latest"
-NFQWS_PATH="$HOME_DIR_PATH/nfqws"
+source "$(dirname "$0")/src/lib/paths.sh"
+configure_paths "$(dirname "$0")"
 
 # Подключаем библиотеки
 source "$HOME_DIR_PATH/src/lib/elevate.sh"
 source "$HOME_DIR_PATH/src/lib/constants.sh"
 source "$HOME_DIR_PATH/src/lib/common.sh"
+source "$HOME_DIR_PATH/src/lib/security.sh"
 source "$HOME_DIR_PATH/src/lib/download.sh"
 source "$HOME_DIR_PATH/src/lib/desktop.sh"
 source "$HOME_DIR_PATH/src/lib/permissions.sh"
@@ -62,6 +59,9 @@ case "${1:-}" in
         run_daemon
         ;;
     kill)
+        if check_conf_file "$CONF_FILE"; then
+            load_config "$CONF_FILE"
+        fi
         stop_zapret
         ;;
     setup-permissions)

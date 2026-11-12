@@ -7,10 +7,10 @@
 show_permissions_usage() {
     echo "Usage: $(basename "$0") setup-permissions [command]"
     echo
-    echo "Настройка NOPASSWD для nft, iptables, ip6tables и nfqws."
+    echo "Проверка и удаление старых правил NOPASSWD. Создание отключено."
     echo
     echo "Commands:"
-    echo "    (без аргументов)  Создать /etc/sudoers.d/zapret"
+    echo "    (без аргументов)  Показать причину отключения NOPASSWD"
     echo "    status            Показать текущие настройки"
     echo "    remove            Удалить настройки"
 }

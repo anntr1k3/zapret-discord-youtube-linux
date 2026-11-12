@@ -21,6 +21,11 @@ check_service_status() {
 
 # Функция для установки сервиса
 install_service() {
+    if [[ "${SYSTEM_INSTALL:-false}" == true ]] || grep -q '^# Managed by zapret-system-installer-v1$' "$SERVICE_FILE" 2>/dev/null; then
+        echo "Используйте install.py для управления системной установкой." >&2
+        return 1
+    fi
+    assert_secure_service_tree "$HOME_DIR_PATH" || return 1
     # Получение абсолютного пути
     local absolute_homedir_path
     absolute_homedir_path="$(realpath "$HOME_DIR_PATH")"
@@ -54,6 +59,10 @@ EOF
 
 # Функция для удаления сервиса
 remove_service() {
+    if [[ "${SYSTEM_INSTALL:-false}" == true ]] || grep -q '^# Managed by zapret-system-installer-v1$' "$SERVICE_FILE" 2>/dev/null; then
+        echo "Для удаления системной установки используйте install.py remove." >&2
+        return 1
+    fi
     echo "Удаление сервиса..."
     elevate systemctl stop "$SERVICE_NAME"
     elevate systemctl disable "$SERVICE_NAME"

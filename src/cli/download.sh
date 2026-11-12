@@ -56,6 +56,10 @@ show_dependencies_menu() {
 
 # Обработчик команды download-deps
 handle_download_deps_command() {
+    if [[ "${SYSTEM_INSTALL:-false}" == true ]]; then
+        echo "Системные версии не изменяются на месте. Подготовьте checkout и используйте install.py update --source PATH." >&2
+        return 1
+    fi
     local zapret_version=""
     local strat_version=""
     local interactive=true

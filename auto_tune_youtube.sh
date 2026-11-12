@@ -206,14 +206,32 @@ show_results() {
 save_strategy() {
     local name=$1
     [[ -z "$name" ]] && return 1
-    
-    cat > "$CONF_FILE" << EOF
+
+    # Используем тот же валидатор, что и service.sh. Не теряем старый конфиг.
+    local tmp
+    tmp=$(mktemp "${CONF_FILE}.XXXXXX") || return 1
+    cat > "$tmp" << EOF
 interface=any
-gamefilter=false
+gamefiltertcp=false
+gamefilterudp=false
 strategy=$name
+firewall_backend=auto
 EOF
+    source "$SCRIPT_DIR/src/lib/common.sh"
+    if ! check_conf_file "$tmp"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
+    if [[ -e "$CONF_FILE" ]] && ! cp -p -- "$CONF_FILE" "${CONF_FILE}.backup"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
+    if ! mv -f -- "$tmp" "$CONF_FILE"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
     echo -e "${GREEN}✓${NC} Сохранено: strategy=$name"
-    echo "  Запуск: ./main_script.sh -nointeractive"
+    echo "  Запуск: ./service.sh run --config conf.env"
 }
 
 # ═══════════════════════════════════════════════════════════

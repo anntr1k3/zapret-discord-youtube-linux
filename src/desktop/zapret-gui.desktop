@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Zapret
+Comment=Управление сервисом zapret и стратегиями Flowseal
+Exec=/usr/bin/python3 /opt/zapret-discord-youtube/current/src/gui/launch.py
+Icon=network-workgroup-symbolic
+Terminal=false
+Categories=Network;Settings;
+StartupNotify=true

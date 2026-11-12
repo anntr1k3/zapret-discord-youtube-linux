@@ -10,6 +10,10 @@ ipset="$REPO_DIR/lists/ipset-all.txt"
 bipset="$REPO_DIR/lists/ipset-all.txt.backup"
 
 change_mode_ipset(){
+    if [[ "${SYSTEM_INSTALL:-false}" == true ]]; then
+        echo "Старое меню не меняет IPSet в системной установке. Используйте вкладку «Настройки» нового GUI." >&2
+        return 1
+    fi
     if [[ $# -lt 1 ]]; then
         echo "Не приложены аргументы"
         read -p "Нажмите Enter для продолжения..."
@@ -67,6 +71,10 @@ switch_to_loaded(){
 
 
 get_mode_ipset(){
+    if [[ "${SYSTEM_INSTALL:-false}" == true ]]; then
+        echo "управляется конфигурацией системной установки"
+        return 0
+    fi
     local ipset="$REPO_DIR/lists/ipset-all.txt"
 
     if ! [ -d "$REPO_DIR/lists" ]; then

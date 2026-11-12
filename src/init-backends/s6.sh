@@ -23,6 +23,7 @@ check_service_status() {
 
 # Функция установки
 install_service() {
+    assert_secure_service_tree "$HOME_DIR_PATH" || return 1
     local absolute_homedir_path="$(realpath "${HOME_DIR_PATH:-$HOME}")"
     local absolute_service_script_path="$absolute_homedir_path/service.sh"
 

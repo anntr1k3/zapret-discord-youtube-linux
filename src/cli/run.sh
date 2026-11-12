@@ -115,6 +115,11 @@ run_zapret_command() {
         interface="$use_interface"
         gamefiltertcp="$use_gamefilter_tcp"
         gamefilterudp="$use_gamefilter_udp"
+        gamefiltertcp_ports="1024-65535"
+        gamefilterudp_ports="1024-65535"
+        ipset_mode="legacy"
+        fakediscord=""
+        fakegameudp=""
         FIREWALL_BACKEND="${use_firewall_backend:-auto}"
 
     # Режим 3: Интерактивный выбор
@@ -179,6 +184,12 @@ run_zapret_command() {
     echo ""
     echo "zapret запущен. Нажмите Ctrl+C для завершения..."
     trap 'stop_zapret; exit 0' SIGTERM SIGINT
+    if [[ "${SYSTEM_INSTALL:-false}" == true && -n "${NOTIFY_SOCKET:-}" ]]; then
+        if ! systemd-notify --ready --status="nfqws и firewall настроены"; then
+            stop_zapret
+            return 1
+        fi
+    fi
     sleep infinity &
     wait
 }

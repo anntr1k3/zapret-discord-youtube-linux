@@ -41,6 +41,7 @@ elevate chmod 0644 /etc/logrotate.d/$SERVICE_NAME
 
 # Функция для установки сервиса
 install_service() {
+    assert_secure_service_tree "$HOME_DIR_PATH" || return 1
     # Получение абсолютного пути
     local absolute_homedir_path
     absolute_homedir_path="$(realpath "$HOME_DIR_PATH")"
