@@ -51,6 +51,14 @@ def load_discord_cache_module():
     return module
 
 
+def load_strategy_tester_module():
+    path = Path(__file__).resolve().parents[1] / "lib/strategy_tester.py"
+    spec = importlib.util.spec_from_file_location("gui_strategy_tester", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def write_diagnostics_report(report, target):
     if report is None:
         raise ValueError("Сначала выполните диагностику")
@@ -84,6 +92,7 @@ class Backend:
         self.diagnostic_report = None
         self.discord_report = None
         self.tcp_state = None
+        self.tester_last_report = None
 
     @staticmethod
     def command(argv, **kwargs):
@@ -162,7 +171,9 @@ class Backend:
                 "auto_check": auto_check, "versions": versions,
                 "status_supported": self.status_supported(), "service_report": self.status_report,
                 "unit_error": unit_error, "diagnostics": self.diagnostic_report, "discord": self.discord_report,
-                "tcp_timestamps_supported": self.tcp_timestamps_supported(), "tcp_timestamps": self.tcp_state}
+                "tcp_timestamps_supported": self.tcp_timestamps_supported(), "tcp_timestamps": self.tcp_state,
+                "tester_supported": self.tester_supported(), "tester": self.tester_preview(),
+                "tester_report_summary": self.tester_last_report is not None}
 
     def tcp_timestamps_supported(self):
         try:
@@ -185,6 +196,76 @@ class Backend:
         result = self.call_helper("enable-tcp-timestamps", {"expected_value": expected_value})
         self.tcp_state = result["tcp_timestamps"]
         return result
+
+    def tester_supported(self):
+        try:
+            return b"# strategy-tester-v1:" in self.trusted_helper().read_bytes()
+        except (OSError, RuntimeError):
+            return False
+
+    def tester_preview(self):
+        module = load_strategy_tester_module()
+        targets, problems = module.load_targets(self.base() / "zapret-latest/utils/targets.txt")
+        return {"strategies": module.discover_strategies(self.base()),
+                "targets": targets, "problems": problems}
+
+    def locate_probe_tools(self):
+        import shutil
+        curl, ping = shutil.which("curl"), shutil.which("ping")
+        missing = [name for name, path in (("curl", curl), ("ping", ping)) if not path]
+        if missing:
+            raise RuntimeError("Не найдены команды для сетевых проб: " + ", ".join(missing))
+        return curl, ping
+
+    def tester_run(self, test_type="standard", strategies=(), *, targets=None,
+                   custom_dpi_host=None, cancel_event=None, execute=None, dpi_entries=None,
+                   progress=None, curl_path=None, ping_path=None):
+        module = load_strategy_tester_module()
+        if test_type not in ("standard", "dpi"):
+            raise ValueError("Неподдерживаемый тип теста")
+        strategies = [name for name in (strategies or []) if name]
+        if strategies and not self.tester_supported():
+            raise RuntimeError("Нужен установленный доверенный помощник с поддержкой тестировщика стратегий. "
+                               "Обновление системной копии автоматически не выполняется.")
+        if strategies:
+            raise RuntimeError("Запуск стратегий заблокирован: runner установленного помощника ещё не подключён.")
+        if targets is None:
+            targets, target_problems = module.load_targets(self.base() / "zapret-latest/utils/targets.txt")
+        else:
+            target_problems = []
+        if not targets:
+            raise ValueError("Список целей пуст; проверьте utils/targets.txt")
+        if curl_path is None or ping_path is None:
+            curl_path, ping_path = self.locate_probe_tools()
+        dpi_targets, dpi_warning, payload_path = (), None, None
+        if test_type == "dpi":
+            if dpi_entries is None and not custom_dpi_host:
+                dpi_entries, dpi_warning = module.fetch_dpi_suite()
+            dpi_targets = module.dpi_suite_targets(dpi_entries, custom_dpi_host)
+            if not dpi_targets:
+                raise ValueError("Нет целей для DPI-теста: набор недоступен; укажите собственный host")
+            fd, payload_path = tempfile.mkstemp(prefix=".zapret-dpi-payload-", suffix=".bin")
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(os.urandom(65536))
+            if not custom_dpi_host and execute is None:
+                execute = module.public_suite_execute
+        session = module.TesterSession(
+            strategies=strategies, targets=targets, test_type=test_type, runner=None,
+            execute=execute, cancel_event=cancel_event, progress=progress,
+            curl_path=curl_path, ping_path=ping_path,
+            dpi_targets=dpi_targets, payload_path=payload_path)
+        report = session.run()
+        warnings = list(report.get("warnings", []))
+        warnings.extend(target_problems)
+        if dpi_warning:
+            warnings.append(dpi_warning)
+        report["warnings"] = warnings
+        self.tester_last_report = report
+        return report
+
+    def export_tester_report(self, target):
+        module = load_strategy_tester_module()
+        return module.export_text(self.tester_last_report, target)
 
     def discord_manager(self):
         return load_discord_cache_module().CacheManager(config=os.environ.get("XDG_CONFIG_HOME"))
@@ -396,6 +477,8 @@ class DemoBackend:
         self.demo_discord_cleaned = False
         self.tcp_state = None
         self.demo_tcp_value = "0"
+        self.tester_last_report = None
+        self.tester_calls = []
         self.hosts_data = b"127.0.0.1 localhost\n::1 localhost\n192.0.2.10 keep.example\n"
         self.demo_hosts_body = (b"203.0.113.10 github.com\n203.0.113.11 example.invalid\n"
                                 b"2001:db8::10 example.invalid\n")
@@ -432,7 +515,76 @@ class DemoBackend:
                               "versions": self.versions(), "status_supported": True,
                               "service_report": self.status_report, "diagnostics": self.diagnostic_report,
                               "discord": self.discord_report, "tcp_timestamps_supported": True,
-                              "tcp_timestamps": self.tcp_state})
+                              "tcp_timestamps": self.tcp_state,
+                              "tester_supported": "demo", "tester": self.tester_preview(),
+                              "tester_report_summary": self.tester_last_report is not None})
+
+    def tester_preview(self):
+        targets = [{"name": "DiscordMain", "url": "https://discord.com", "ping": "discord.com"},
+                   {"name": "YouTubeWeb", "url": "https://www.youtube.com", "ping": "www.youtube.com"},
+                   {"name": "Quad9DNS9999", "url": None, "ping": "9.9.9.9"}]
+        return {"strategies": ["demo_a.bat", "demo_b.bat"], "targets": targets, "problems": []}
+
+    def locate_probe_tools(self):
+        return "demo-curl", "demo-ping"
+
+    def tester_run(self, test_type="standard", strategies=(), *, targets=None,
+                   custom_dpi_host=None, cancel_event=None, execute=None, dpi_entries=None,
+                   progress=None, curl_path=None, ping_path=None):
+        module = load_strategy_tester_module()
+        if test_type not in ("standard", "dpi"):
+            raise ValueError("Неподдерживаемый тип теста")
+        strategies = [name for name in (strategies or []) if name]
+        if targets is None:
+            targets = self.tester_preview()["targets"]
+        holder = {"current": None}
+        calls = self.tester_calls
+
+        class DemoRunner:
+            def snapshot(inner):
+                calls.append(("snapshot",))
+                return {"strategy": self.strategy, "active": self.active}
+
+            def start(inner, name):
+                holder["current"] = name
+                calls.append(("start", name))
+
+            def stop(inner):
+                calls.append(("stop",))
+
+            def restore(inner, snapshot):
+                calls.append(("restore", snapshot))
+
+        def demo_execute(argv, timeout):
+            if argv[0] == "demo-curl":
+                if "--range" in argv:
+                    return 0, "200 65536 512 0.4", ""
+                if "--tlsv1.3" in argv:
+                    return 35, "000", "error:0A00010B:SSL routines::wrong version number"
+                if holder["current"] == "demo_a.bat" and "--http1.1" in argv:
+                    return 28, "000", "Connection timed out"
+                return 0, "200", ""
+            return 0, "rtt min/avg/max/mdev = 10.0/20.0/30.0/1.0 ms", ""
+
+        dpi_targets, payload_path = (), None
+        if test_type == "dpi":
+            dpi_targets = module.dpi_suite_targets([], custom_dpi_host or "example.org")
+            fd, payload_path = tempfile.mkstemp(prefix=".zapret-demo-dpi-", suffix=".bin")
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(os.urandom(1024))
+        session = module.TesterSession(
+            strategies=strategies, targets=targets, test_type=test_type,
+            runner=DemoRunner() if strategies else None,
+            execute=execute or demo_execute, cancel_event=cancel_event, progress=progress,
+            curl_path="demo-curl", ping_path="demo-ping", init_wait=0,
+            dpi_targets=dpi_targets, payload_path=payload_path)
+        report = session.run()
+        self.tester_last_report = report
+        return report
+
+    def export_tester_report(self, target):
+        module = load_strategy_tester_module()
+        return module.export_text(self.tester_last_report, target)
 
     def read_tcp_timestamps(self):
         self.tcp_state = {"value": self.demo_tcp_value, "enabled": self.demo_tcp_value != "0",

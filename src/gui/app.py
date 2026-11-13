@@ -7,7 +7,7 @@ import sys
 import threading
 
 from .backend import Backend, DemoBackend
-from .presentation import operation_messages, profile_index, game_filter_values, version_text, service_status_text, service_state_title, diagnostics_text
+from .presentation import operation_messages, profile_index, game_filter_values, version_text, service_status_text, service_state_title, diagnostics_text, tester_text
 from ..lib.strategy_sync import validate_game_ports
 
 
@@ -50,6 +50,8 @@ def main(argv=None):
             self.smoke_expected_error = False
             self.current_toast = None
             self.error_text = ""
+            self.tester_cancel_event = None
+            self.tester_checks = []
 
         def do_activate(self):
             if hasattr(self, "window"):
@@ -84,6 +86,9 @@ def main(argv=None):
             self.progress_label = Gtk.Label(wrap=True, xalign=0)
             self.progress_label.add_css_class("dim-label")
             progress_box.append(self.progress_label)
+            # Outside self.pages: disabling the stack must not disable cancel.
+            self.tester_cancel = self.button(progress_box, "Прервать тест", self.cancel_tester)
+            self.tester_cancel.set_sensitive(False)
             self.progress.set_child(progress_box)
             outer.append(self.progress)
             page = self.page(stack, "service", "Сервис")
@@ -239,6 +244,34 @@ def main(argv=None):
             page.append(self.discord_info)
             self.discord_clean = self.button(page, "Очистить выбранный кэш…", self.clean_discord)
 
+            page = self.page(stack, "tester", "Тестировщик")
+            page.append(Gtk.Label(label="Стандартный тип: HTTP/TLS1.2/TLS1.3-пробы и ping для целей из utils/targets.txt.\nBaseline выполняется без root и не трогает сервис. Уже работающий zapret остаётся включён: это замер текущего соединения, не гарантированно чистый канал.\nЗапуск стратегий пока недоступен: runner установленного помощника ещё не подключён. В демо используются только имитации.\nПробы не доказывают работу видео, QUIC или голоса Discord. Рекомендация информационная и не меняет профиль автоматически.", wrap=True, xalign=0))
+            self.tester_type_standard = Gtk.CheckButton(label="Стандартный: HTTP/TLS + ping", active=True)
+            page.append(self.tester_type_standard)
+            self.tester_type_dpi = Gtk.CheckButton(label="DPI TCP 16–20: POST + Range на один host", group=self.tester_type_standard)
+            self.tester_type_dpi.connect("notify::active", lambda *_: self.update_tester_mode())
+            page.append(self.tester_type_dpi)
+            self.tester_host = Gtk.Entry(hexpand=True)
+            self.tester_host.set_placeholder_text("Собственный host для DPI (пусто — публичный набор, скачивается по запросу)")
+            self.tester_host.set_sensitive(False)
+            page.append(self.tester_host)
+            page.append(Gtk.Label(label="Стратегии (ничего не выбрано — baseline без изменений сервиса):", wrap=True, xalign=0))
+            self.tester_checks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            page.append(self.tester_checks_box)
+            row = Gtk.Box(spacing=8)
+            page.append(row)
+            self.tester_start = self.button(row, "Запустить тестирование…", self.start_tester)
+            self.tester_status = Gtk.Label(wrap=True, xalign=0, selectable=True)
+            page.append(self.tester_status)
+            self.tester_export = self.button(page, "Экспорт текстового отчёта…", self.choose_tester_export)
+            self.tester_export.set_sensitive(False)
+            self.tester_view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                            wrap_mode=Gtk.WrapMode.WORD_CHAR)
+            self.tester_view.get_buffer().set_text("Тестирование ещё не выполнялось.")
+            scroll = Gtk.ScrolledWindow(vexpand=True, min_content_height=300)
+            scroll.set_child(self.tester_view)
+            page.append(scroll)
+
             page = self.page(stack, "logs", "Журнал")
             self.button(page, "Загрузить последние сообщения", lambda: self.run_operation(self.backend.logs, self.show_logs, action="logs"))
             self.log_view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
@@ -275,6 +308,12 @@ def main(argv=None):
             busy_text, success_text = operation_messages(action)
             self.busy = True
             self.pages.set_sensitive(False)
+            if action == "tester-run":
+                # Cancel must stay reachable while the tester operation runs.
+                self.tester_cancel_event = threading.Event()
+                self.tester_cancel.set_sensitive(True)
+                if args.smoke_test:
+                    assert self.tester_cancel.is_sensitive(), "cancel inherits disabled stack sensitivity"
             if self.current_toast is not None:
                 self.current_toast.dismiss()
                 self.current_toast = None
@@ -301,6 +340,8 @@ def main(argv=None):
             self.spinner.stop()
             self.progress.set_reveal_child(False)
             self.pages.set_sensitive(True)
+            self.tester_cancel.set_sensitive(False)
+            self.tester_cancel_event = None
             if snapshot is not None:
                 self.render(snapshot)
             if error:
@@ -353,6 +394,7 @@ def main(argv=None):
                 tcp_text += "\nСнимок: " + str(tcp.get("checked_at", "время неизвестно"))
                 tcp_text += "\nТолько текущая загрузка/namespace. После перезагрузки или внешнего применения sysctl значение может измениться."
             self.tcp_info.set_text(tcp_text)
+            self.render_tester(state)
             self.render_discord()
             installed = state["installed"]
             ready = state["helper_ready"]
@@ -516,7 +558,7 @@ def main(argv=None):
             self.auto_check_toggle.set_sensitive(enabled is not None and not check.get("error"))
             self.auto_check_toggle.set_label("Выключить автоматическую проверку…" if enabled else "Включить автоматическую проверку…")
 
-        def confirm(self, title, body, operation, action):
+        def confirm(self, title, body, operation, action, callback=None):
             if self.busy:
                 return
             dialog = Adw.AlertDialog(heading=title, body=body)
@@ -525,7 +567,7 @@ def main(argv=None):
             dialog.set_response_appearance("apply", Adw.ResponseAppearance.SUGGESTED)
             dialog.set_default_response("cancel")
             dialog.set_close_response("cancel")
-            dialog.connect("response", lambda _, response: self.run_operation(operation, action=action) if response == "apply" else None)
+            dialog.connect("response", lambda _, response: self.run_operation(operation, callback, action=action) if response == "apply" else None)
             dialog.present(self.window)
 
         def service(self, action):
@@ -787,6 +829,95 @@ def main(argv=None):
                     self.run_operation(lambda: self.backend.export_diagnostics(path), action="export-diagnostics")
             dialog.save(self.window, None, saved)
 
+        def update_tester_mode(self):
+            self.tester_host.set_sensitive(self.tester_type_dpi.get_active())
+
+        def render_tester(self, state):
+            tester = state.get("tester") or {}
+            previous = {name: check.get_active() for name, check in self.tester_checks}
+            child = self.tester_checks_box.get_first_child()
+            while child is not None:
+                following = child.get_next_sibling()
+                self.tester_checks_box.remove(child)
+                child = following
+            self.tester_checks = []
+            for name in tester.get("strategies") or []:
+                check = Gtk.CheckButton(label=name, active=previous.get(name, False))
+                self.tester_checks_box.append(check)
+                self.tester_checks.append((name, check))
+            if not self.tester_checks:
+                self.tester_checks_box.append(Gtk.Label(label="Стратегии не найдены; доступен только baseline.", wrap=True, xalign=0))
+            self.tester_export.set_sensitive(bool(state.get("tester_report_summary")))
+
+        def start_tester(self):
+            if self.busy:
+                return
+            dpi = self.tester_type_dpi.get_active()
+            names = [name for name, check in self.tester_checks if check.get_active()]
+            host = self.tester_host.get_text().strip() or None
+            if dpi:
+                body = "DPI-пробы: POST с Range 0-65535 и короткими таймаутами" + (f" на host {host}." if host
+                       else " на цели публичного набора (hyperion-cs.github.io); набор скачивается по этому нажатию и только на время теста.")
+                body += "\nИзменений сервиса, firewall и настроек нет; пробы выполняются от вашего пользователя."
+            elif names:
+                body = ("Перед пробами текущий сервис zapret будет остановлен, каждая выбранная стратегия применяется по очереди, "
+                        "после каждой выполняются пробы, затем прежнее состояние восстанавливается — в том числе при ошибке запуска.\n"
+                        "Может потребоваться авторизация администратора. Конфиг не изменяется. Рекомендация информационная и не применяется автоматически.")
+            else:
+                body = "Baseline: пробы без стратегий. Сервис, firewall и настройки не изменяются, root не нужен."
+            if names and not self.state.get("tester_supported"):
+                body = "Запуск стратегий пока недоступен: runner установленного помощника ещё не подключён. Снимите выбор стратегий для baseline."
+                dialog = Adw.AlertDialog(heading="Тестирование стратегий недоступно", body=body)
+                dialog.add_response("close", "Закрыть")
+                dialog.present(self.window)
+                return
+            if names and dpi:
+                body += "\nВыбранные стратегии требуют временного изменения сервиса и firewall с восстановлением; возможна авторизация."
+            def run():
+                return self.backend.tester_run("dpi" if dpi else "standard", names, custom_dpi_host=host,
+                    cancel_event=self.tester_cancel_event, progress=self.tester_progress_event)
+            self.confirm("Запустить тестирование?", body, run,
+                action="tester-run", callback=self.show_tester_report)
+
+        def cancel_tester(self):
+            event = self.tester_cancel_event
+            if event is not None:
+                event.set()
+                self.tester_status.set_text("Отмена запрошена: оставшиеся стратегии и пробы будут пропущены, состояние будет восстановлено.")
+
+        def tester_progress_event(self, event):
+            GLib.idle_add(self.update_tester_status, event)
+
+        def update_tester_status(self, event):
+            kind = event.get("event")
+            if kind == "strategy":
+                self.tester_status.set_text(f"Проверяется {event.get('index', 0) + 1}/{event.get('total')}: {event.get('name')}")
+            elif kind == "probes":
+                self.tester_status.set_text(f"Выполняются пробы: {event.get('name')} · целей: {event.get('count')}")
+            elif kind == "done":
+                self.tester_status.set_text("Тестирование завершено.")
+            return GLib.SOURCE_REMOVE
+
+        def show_tester_report(self, result):
+            self.tester_view.get_buffer().set_text(tester_text(result))
+
+        def choose_tester_export(self):
+            if not self.state.get("tester_report_summary"):
+                return
+            dialog = Gtk.FileDialog(title="Сохранить текстовый отчёт тестирования", initial_name="zapret-tester-report.txt")
+            def saved(source, response):
+                try:
+                    target = source.save_finish(response)
+                except GLib.Error as error:
+                    if not error.matches(GLib.quark_from_string("gtk-dialog-error-quark"), Gtk.DialogError.DISMISSED):
+                        self.error_text = str(error)
+                        self.error_banner.set_revealed(True)
+                    return
+                path = target.get_path()
+                if path:
+                    self.run_operation(lambda: self.backend.export_tester_report(path), action="export-tester")
+            dialog.save(self.window, None, saved)
+
         def render_discord(self):
             index = self.discord_instance.get_selected()
             previous = self.discord_choices[index]["id"] if index < len(self.discord_choices) else None
@@ -878,7 +1009,20 @@ def main(argv=None):
                         assert not self.discord_clean.get_sensitive(), "empty cache can be cleaned again"
                         assert self.state["tcp_timestamps"]["value"] == "1", "demo timestamps not enabled"
                         assert not self.enable_tcp.get_sensitive(), "already enabled timestamps can be rewritten"
-                        print("GTK demo smoke: PASS (29 operations, settings, versions, diagnostics, runtime timestamps, Discord cache, error details)")
+                        assert self.state["tester_report_summary"], "tester report missing from snapshot"
+                        tester_buffer = self.tester_view.get_buffer()
+                        tester_text_value = tester_buffer.get_text(tester_buffer.get_start_iter(), tester_buffer.get_end_iter(), False)
+                        assert "Best strategy: baseline" in tester_text_value, "dpi tester best missing"
+                        assert "Apache-2.0" in tester_text_value, "dpi license missing"
+                        assert "CUSTOM (Пользовательский)" in tester_text_value, "custom dpi target missing"
+                        assert self.tester_export.get_sensitive(), "tester export disabled"
+                        starts = [call for call in self.backend.tester_calls if call[0] == "start"]
+                        assert ("start", "demo_a.bat") in starts and ("start", "demo_b.bat") in starts, "strategies not started"
+                        assert len([call for call in self.backend.tester_calls if call[0] == "stop"]) == 2, "strategies not stopped"
+                        assert [call for call in self.backend.tester_calls if call[0] == "restore"], "state not restored"
+                        assert self.state["tester"]["strategies"] == ["demo_a.bat", "demo_b.bat"], "tester strategy list missing"
+                        assert self.tester_cancel.get_sensitive() is False, "cancel stays sensitive after run"
+                        print("GTK demo smoke: PASS (31 operations, settings, versions, diagnostics, runtime timestamps, Discord cache, tester, error details)")
                     except AssertionError as error:
                         print(f"GTK demo smoke: FAILED ({error})")
                 self.quit()
@@ -945,12 +1089,17 @@ def main(argv=None):
                      ("diagnostics", self.backend.diagnostics),
                      ("scan-discord", self.backend.scan_discord),
                      ("clean-discord", lambda: self.backend.clean_discord(self.state["discord"]["instances"][0]["id"],
-                         self.state["discord"]["instances"][0]["token"]))]
+                         self.state["discord"]["instances"][0]["token"])),
+                     ("tester-run", lambda: self.backend.tester_run("standard", ["demo_a.bat", "demo_b.bat"],
+                                                                    cancel_event=threading.Event(),
+                                                                    progress=self.tester_progress_event)),
+                     ("tester-run", lambda: self.backend.tester_run("dpi", [], custom_dpi_host="example.org"))]
             if self.smoke_index < len(steps):
                 action, step = steps[self.smoke_index]
                 self.smoke_index += 1
                 self.smoke_last_action = action
-                self.run_operation(step, action=action)
+                callback = self.show_tester_report if action == "tester-run" else None
+                self.run_operation(step, callback, action=action)
             else:
                 if (self.state["active"] or self.state["auto_check"]["enabled"] or not self.state["auto_check"]["last_check"]
                         or self.state["config"]["config"]["strategy"] != "general_alt.bat" or not self.state["enabled"]

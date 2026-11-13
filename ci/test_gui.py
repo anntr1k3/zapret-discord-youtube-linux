@@ -35,11 +35,27 @@ class PresentationTests(unittest.TestCase):
         for action in ("read-config", "start", "stop", "restart", "select-profile",
                        "set-autostart", "set-game-filter", "set-ipset-mode", "set-active-fakes",
                        "fetch-ipset", "update-ipset",
-                       "check", "prepare", "apply", "logs"):
+                       "check", "prepare", "apply", "logs",
+                       "tester-run", "export-tester"):
             busy, success = self.presentation.operation_messages(action)
             self.assertTrue(busy.endswith("…"))
             self.assertTrue(success)
             self.assertNotEqual(success, "Готово")
+
+    def test_tester_text_placeholder_and_report(self):
+        placeholder = self.presentation.tester_text(None)
+        self.assertIn("не выполнялось", placeholder)
+        self.assertIn("Baseline", placeholder)
+        report = {"type": "standard", "mode": "baseline", "started_at": "2026-11-13T10:00:00+00:00",
+                  "finished_at": "2026-11-13T10:01:00+00:00", "cancelled": False, "restore_error": None,
+                  "warnings": [], "dpi_license": None, "dpi_targets": [], "best": None,
+                  "strategies": [{"name": "baseline", "error": None, "seconds": 1.0, "targets": [],
+                                  "counts": {}}],
+                  "analytics": {"strategies": {"baseline": {"OK": 0, "SSL": 0, "ERROR": 0, "UNSUP": 0,
+                                                            "PingOK": 0, "PingFail": 0}}, "best": None}}
+        text = self.presentation.tester_text(report)
+        self.assertIn("Тест стратегий · тип standard · режим baseline", text)
+        self.assertNotIn("Best strategy", text)
 
     def test_gui_has_no_manual_rollback_action(self):
         tree = ast.parse((ROOT / "src/gui/app.py").read_text())

@@ -1,5 +1,8 @@
 """GTK-independent labels and selection rules for operation feedback."""
 
+import importlib.util
+from pathlib import Path
+
 
 MESSAGES = {
     "refresh": ("Обновляем состояние…", None),
@@ -11,6 +14,8 @@ MESSAGES = {
     "clean-discord": ("Очищаем только подтверждённый кэш Discord…", "Подтверждённый кэш Discord очищен"),
     "read-tcp-timestamps": ("Читаем TCP timestamps · может потребоваться авторизация…", "TCP timestamps прочитаны"),
     "enable-tcp-timestamps": ("Включаем TCP timestamps · может потребоваться авторизация…", "TCP timestamps включены без постоянной настройки"),
+    "tester-run": ("Выполняем сетевые пробы · дождитесь отчёта…", "Прогон завершён — проверьте результат на вкладке «Тестировщик»"),
+    "export-tester": ("Сохраняем текстовый отчёт тестирования…", "Отчёт тестирования сохранён"),
     "start": ("Запускаем сервис · может потребоваться авторизация…", "Команда запуска выполнена"),
     "stop": ("Останавливаем сервис · может потребоваться авторизация…", "Команда остановки выполнена"),
     "restart": ("Перезапускаем сервис · может потребоваться авторизация…", "Команда перезапуска выполнена"),
@@ -34,6 +39,25 @@ MESSAGES = {
 
 def operation_messages(action):
     return MESSAGES[action]
+
+
+def load_strategy_tester_module():
+    path = Path(__file__).resolve().parents[1] / "lib/strategy_tester.py"
+    spec = importlib.util.spec_from_file_location("presentation_strategy_tester", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def tester_text(report):
+    if not report:
+        return ("Тестирование ещё не выполнялось. Baseline без стратегий не трогает сервис; "
+                "работающий сервис остаётся включён. Запуск стратегий пока недоступен без runner помощника.")
+    module = load_strategy_tester_module()
+    try:
+        return module.format_text(report)
+    except Exception as error:
+        return f"Отчёт тестирования не удалось отформатировать: {error}"
 
 
 def diagnostics_text(report):
