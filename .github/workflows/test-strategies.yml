@@ -9,20 +9,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Offline regression tests (no root or firewall)
-        run: python3 ci/test_regressions.py
-      - name: Offline system installer tests
-        run: python3 ci/test_installer.py
-      - name: Stop shortcut tests (no service operations)
-        run: python3 ci/test_stop_shortcut.py
-      - name: Strategy synchronization tests (offline)
-        run: python3 ci/test_strategy_sync.py
-      - name: GUI backend and helper tests (no GTK or authorization)
-        run: python3 ci/test_gui.py
-      - name: IPSet mode tests (offline, no firewall)
-        run: python3 ci/test_ipset_mode.py
-      - name: Active fake selection tests (offline, no firewall)
-        run: python3 ci/test_active_fakes.py
+      - name: All offline Python tests (no root, network or host changes)
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s ci -p 'test_*.py'
 
   #######################################################################
   # Strategy tests (native Ubuntu)

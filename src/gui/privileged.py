@@ -20,7 +20,9 @@ SERVICE = "zapret_discord_youtube.service"
 RELEASES = Path("/opt/zapret-discord-youtube/releases")
 HOSTS = Path("/etc/hosts")
 # read-only-service-status-v1: safe for unprivileged capability detection.
+# tcp-timestamps-enable-v1: fixed-key runtime-only action, independent of config.
 ACTIONS = {"read-config": set(), "read-status": set(), "select-profile": {"strategy", "expected_sha256"},
+           "read-tcp-timestamps": set(), "enable-tcp-timestamps": {"expected_value"},
            "set-game-filter": {"mode", "tcp_ports", "udp_ports", "expected_sha256"},
            "set-ipset-mode": {"mode", "expected_sha256", "expected_list_sha256"},
            "set-active-fakes": {"discord", "gameudp", "expected_sha256"},
@@ -32,6 +34,9 @@ ACTIONS = {"read-config": set(), "read-status": set(), "select-profile": {"strat
 def validate_payload(action, payload):
     if action not in ACTIONS or not isinstance(payload, dict) or set(payload) != ACTIONS[action]:
         raise ValueError("Неизвестная операция или поля административного запроса")
+    if action == "enable-tcp-timestamps":
+        if not isinstance(payload["expected_value"], str) or payload["expected_value"] not in ("0", "1", "2"):
+            raise ValueError("Требуется прочитанное значение TCP timestamps")
     if action == "select-profile":
         if not isinstance(payload["strategy"], str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.bat", payload["strategy"]):
             raise ValueError("Некорректное имя стратегии")
@@ -111,6 +116,14 @@ def load_hosts_file():
     return module
 
 
+def load_tcp_timestamps():
+    path = Path(__file__).resolve().parents[1] / "lib/tcp_timestamps.py"
+    spec = importlib.util.spec_from_file_location("installed_tcp_timestamps", path)
+    module = importlib.util.module_from_spec(spec)
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+    return module
+
+
 def config_result(installer):
     state = installer.state()
     if state is None:
@@ -134,6 +147,8 @@ def config_result(installer):
         capabilities.append("hosts-update-v1")
     if "read-status" in ACTIONS:
         capabilities.append("service-status-v1")
+    if "enable-tcp-timestamps" in ACTIONS:
+        capabilities.append("tcp-timestamps-enable-v1")
     fakes = installer.fake_state(values, release)
     strategy_name = values.get("strategy")
     usage = {"discord": 0, "gameudp": 0}
@@ -471,6 +486,11 @@ def dispatch(installer, action, payload):
         installer.rollback()
         return {"rolled_back": True}
     with installer.operation():
+        if action in ("read-tcp-timestamps", "enable-tcp-timestamps"):
+            if installer.state() is None:
+                raise ValueError("Управляемая системная установка отсутствует")
+            runtime = load_tcp_timestamps()
+            return runtime.status() if action == "read-tcp-timestamps" else runtime.enable(payload["expected_value"])
         if action == "read-status":
             state = installer.state()
             if state is None:

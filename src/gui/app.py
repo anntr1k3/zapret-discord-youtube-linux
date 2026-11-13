@@ -7,7 +7,7 @@ import sys
 import threading
 
 from .backend import Backend, DemoBackend
-from .presentation import operation_messages, profile_index, game_filter_values, version_text, service_status_text, service_state_title
+from .presentation import operation_messages, profile_index, game_filter_values, version_text, service_status_text, service_state_title, diagnostics_text
 from ..lib.strategy_sync import validate_game_ports
 
 
@@ -202,6 +202,43 @@ def main(argv=None):
             page.append(self.update_info)
             self.apply = self.button(page, "Применить подготовленное…", self.apply_update)
 
+            page = self.page(stack, "diagnostics", "Диагностика")
+            page.append(Gtk.Label(label="Сбор отчёта — только локальные наблюдения, без root, сетевых проб и исправлений. Действия обслуживания ниже запускаются отдельно.\nОтчёт может содержать локальные пути, DNS/proxy-хосты и PID. Просмотрите его перед передачей другим.\nПароли прокси, пути/query URL и содержимое no_proxy не включаются.", wrap=True, xalign=0))
+            self.button(page, "Собрать отчёт", lambda: self.run_operation(self.backend.diagnostics, action="diagnostics"))
+            row = Gtk.Box(spacing=8)
+            page.append(row)
+            self.diagnostics_copy = self.button(row, "Скопировать отчёт", self.copy_diagnostics)
+            self.diagnostics_export = self.button(row, "Экспорт JSON…", self.choose_diagnostics_export)
+            self.diagnostics_view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                                 wrap_mode=Gtk.WrapMode.WORD_CHAR)
+            scroll = Gtk.ScrolledWindow(vexpand=True, min_content_height=320)
+            scroll.set_child(self.diagnostics_view)
+            page.append(scroll)
+            page.append(Gtk.Label(label="Для привилегированных сведений о процессе и firewall используйте расширенный статус на вкладке «Сервис».", wrap=True, xalign=0))
+            page.append(Gtk.Separator())
+            heading = Gtk.Label(label="TCP timestamps · текущая загрузка", xalign=0)
+            heading.add_css_class("title-2")
+            page.append(heading)
+            page.append(Gtk.Label(label="Отдельное административное действие: включить net.ipv4.tcp_timestamps только в работающем ядре.\nЭто системный TCP-параметр текущего network namespace, не настройка одного zapret. Эффективность обхода DPI не гарантируется.\nЗначения 1 и 2 уже означают включённые timestamps и не переписываются. Конфиг, sysctl.d, автозапуск и сервис zapret не меняются.", wrap=True, xalign=0))
+            self.read_tcp = self.button(page, "Прочитать TCP timestamps…", lambda: self.run_operation(
+                self.backend.read_tcp_timestamps, action="read-tcp-timestamps"))
+            self.tcp_info = Gtk.Label(wrap=True, xalign=0, selectable=True)
+            page.append(self.tcp_info)
+            self.enable_tcp = self.button(page, "Включить TCP timestamps…", self.enable_tcp_timestamps)
+            page.append(Gtk.Separator())
+            heading = Gtk.Label(label="Кэш Discord", xalign=0)
+            heading.add_css_class("title-2")
+            page.append(heading)
+            page.append(Gtk.Label(label="Сначала закройте Discord. Проверяются native Stable/PTB/Canary/Development, Flatpak Stable и Snap Stable в поддерживаемых путях.\nОчищаются только Cache, Code Cache и GPUCache выбранного профиля. Токены, Cookies и настройки не удаляются.\nRoot не используется; чужие процессы не завершаются. Symlink, hardlink, вложенные mountpoints и неполная проверка процессов блокируют очистку.", wrap=True, xalign=0))
+            self.button(page, "Проверить профили и кэш Discord", lambda: self.run_operation(self.backend.scan_discord, action="scan-discord"))
+            self.discord_choices = []
+            self.discord_instance = Gtk.DropDown(model=Gtk.StringList.new([]))
+            self.discord_instance.connect("notify::selected", lambda *_: self.update_discord_choice())
+            page.append(self.discord_instance)
+            self.discord_info = Gtk.Label(wrap=True, xalign=0, selectable=True)
+            page.append(self.discord_info)
+            self.discord_clean = self.button(page, "Очистить выбранный кэш…", self.clean_discord)
+
             page = self.page(stack, "logs", "Журнал")
             self.button(page, "Загрузить последние сообщения", lambda: self.run_operation(self.backend.logs, self.show_logs, action="logs"))
             self.log_view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
@@ -297,6 +334,26 @@ def main(argv=None):
 
         def render(self, state):
             self.state = state
+            diagnostic_report = state.get("diagnostics")
+            self.diagnostics_view.get_buffer().set_text(diagnostics_text(diagnostic_report))
+            self.diagnostics_copy.set_sensitive(diagnostic_report is not None)
+            self.diagnostics_export.set_sensitive(diagnostic_report is not None)
+            tcp_supported = state.get("helper_ready") and state.get("tcp_timestamps_supported", False)
+            tcp = state.get("tcp_timestamps")
+            self.read_tcp.set_sensitive(bool(tcp_supported))
+            self.enable_tcp.set_sensitive(bool(tcp_supported and tcp and not tcp.get("error") and tcp.get("value") == "0"))
+            if not tcp_supported:
+                tcp_text = "Нужен установленный доверенный помощник с поддержкой TCP timestamps. Обновление системной копии автоматически не выполняется."
+            elif not tcp:
+                tcp_text = "Сначала отдельно прочитайте параметр с авторизацией. Значение в старом отчёте не считается подтверждением."
+            elif tcp.get("error") or tcp.get("value") is None:
+                tcp_text = "TCP timestamps: неизвестно · " + str(tcp.get("error") or "нет значения")
+            else:
+                tcp_text = f"net.ipv4.tcp_timestamps={tcp['value']} · " + ("выключены" if tcp["value"] == "0" else "уже включены; изменение не требуется")
+                tcp_text += "\nСнимок: " + str(tcp.get("checked_at", "время неизвестно"))
+                tcp_text += "\nТолько текущая загрузка/namespace. После перезагрузки или внешнего применения sysctl значение может измениться."
+            self.tcp_info.set_text(tcp_text)
+            self.render_discord()
             installed = state["installed"]
             ready = state["helper_ready"]
             self.status.set_text(service_state_title(state))
@@ -698,6 +755,89 @@ def main(argv=None):
                         result["staged"], result["sha256"], path), action="export-hosts")
             dialog.save(self.window, None, saved)
 
+        def copy_diagnostics(self):
+            report = self.state.get("diagnostics")
+            if report is not None:
+                self.window.get_clipboard().set(diagnostics_text(report))
+                self.toast.add_toast(Adw.Toast(title="Отчёт скопирован. Проверьте его перед передачей другим."))
+
+        def enable_tcp_timestamps(self):
+            tcp = self.state.get("tcp_timestamps")
+            if not self.state.get("tcp_timestamps_supported") or not tcp or tcp.get("error") or tcp.get("value") != "0":
+                return
+            expected = tcp["value"]
+            self.confirm("Включить TCP timestamps?",
+                         "Будет изменён только net.ipv4.tcp_timestamps: 0 → 1 в текущем ядре/network namespace.\n\nЭто влияет на системный TCP, не только zapret, и не гарантирует решение проблемы доступа. Постоянный файл настройки не создаётся, сервис не перезапускается.\n\nПри обнаруженном изменении после просмотра запись отменяется. При ошибке предпринимается проверяемое восстановление; при неизвестном результате или чужом значении слепой записи не будет. Может потребоваться авторизация администратора.",
+                         lambda: self.backend.enable_tcp_timestamps(expected), action="enable-tcp-timestamps")
+
+        def choose_diagnostics_export(self):
+            if self.state.get("diagnostics") is None:
+                return
+            dialog = Gtk.FileDialog(title="Сохранить отчёт с локальными сетевыми сведениями", initial_name="zapret-diagnostics.json")
+            def saved(source, response):
+                try:
+                    target = source.save_finish(response)
+                except GLib.Error as error:
+                    if not error.matches(GLib.quark_from_string("gtk-dialog-error-quark"), Gtk.DialogError.DISMISSED):
+                        self.error_text = str(error)
+                        self.error_banner.set_revealed(True)
+                    return
+                path = target.get_path()
+                if path:
+                    self.run_operation(lambda: self.backend.export_diagnostics(path), action="export-diagnostics")
+            dialog.save(self.window, None, saved)
+
+        def render_discord(self):
+            index = self.discord_instance.get_selected()
+            previous = self.discord_choices[index]["id"] if index < len(self.discord_choices) else None
+            report = self.state.get("discord")
+            self.discord_choices = report.get("instances", []) if report else []
+            self.discord_instance.set_model(Gtk.StringList.new([item["label"] for item in self.discord_choices]))
+            selected = next((index for index, item in enumerate(self.discord_choices) if item["id"] == previous), 0)
+            self.discord_instance.set_selected(selected if self.discord_choices else Gtk.INVALID_LIST_POSITION)
+            self.update_discord_choice()
+
+        def update_discord_choice(self):
+            if not hasattr(self, "discord_clean"):
+                return
+            report = self.state.get("discord")
+            index = self.discord_instance.get_selected()
+            self.discord_clean.set_sensitive(False)
+            if not report:
+                self.discord_info.set_text("Профили ещё не проверялись. Обнаружение и очистка выполняются только по нажатию.")
+                return
+            processes = report.get("processes", {})
+            ready = processes.get("state") == "clear"
+            warning = ("" if ready else "Закройте Discord/electron и проверьте заново. Очистка заблокирована: "
+                       + ("обнаружены процессы " + str(processes.get("pids", [])) if processes.get("state") == "running" else "проверка процессов неполная") + ".\n")
+            if index >= len(self.discord_choices):
+                self.discord_info.set_text(warning + "Профилей в поддерживаемых путях не найдено. Ничего не создаётся и не удаляется.")
+                return
+            item = self.discord_choices[index]
+            text = warning + item["path"]
+            if item.get("error"):
+                text += "\nОчистка недоступна: " + item["error"]
+            else:
+                text += f"\nФайлов: {item['files']} · логический размер: {item['bytes']} байт"
+                for cache in item.get("caches", []):
+                    text += f"\n{cache['path']} · {cache['files']} файлов · {cache['bytes']} байт"
+                if not item["files"]:
+                    text += "\nФайлов кэша для очистки нет."
+                self.discord_clean.set_sensitive(ready and bool(item.get("token")) and item["files"] > 0)
+            self.discord_info.set_text(text)
+
+        def clean_discord(self):
+            index = self.discord_instance.get_selected()
+            report = self.state.get("discord")
+            if not report or report.get("processes", {}).get("state") != "clear" or index >= len(self.discord_choices):
+                return
+            item = dict(self.discord_choices[index])
+            if item.get("error") or not item.get("token") or not item["files"]:
+                return
+            paths = "\n".join(cache["path"] for cache in item["caches"])
+            self.confirm("Очистка кэша Discord", f"{item['label']}\n{paths}\n\nФайлов: {item['files']} · логический размер: {item['bytes']} байт.\n\nDiscord должен быть закрыт. Удаляется только подтверждённый кэш; токены, Cookies и настройки сохраняются. Корзина не используется: уже удалённые файлы при ошибке не восстанавливаются. Снимок проверяется повторно; при позднем изменении дерева операция может прерваться с частичным результатом.",
+                         lambda: self.backend.clean_discord(item["id"], item["token"]), action="clean-discord")
+
         def apply_update(self):
             pending = self.state.get("pending")
             if pending:
@@ -729,7 +869,16 @@ def main(argv=None):
                         dialog.close()
                         self.failed = False
                         assert self.state["service_report"]["process"]["state"] == "absent", "final service status incorrect"
-                        print("GTK demo smoke: PASS (24 operations, settings, versions, automatic check, service status, unread profile, error details)")
+                        assert self.state["diagnostics"]["checks"], "diagnostics missing"
+                        assert self.diagnostics_copy.get_sensitive() and self.diagnostics_export.get_sensitive(), "diagnostics export disabled"
+                        report_buffer = self.diagnostics_view.get_buffer()
+                        report_text = report_buffer.get_text(report_buffer.get_start_iter(), report_buffer.get_end_iter(), False)
+                        assert "[Неизвестно]" in report_text and "[Неприменимо]" in report_text, "diagnostic states hidden"
+                        assert self.state["discord"]["instances"][0]["files"] == 0, "demo cache not cleaned"
+                        assert not self.discord_clean.get_sensitive(), "empty cache can be cleaned again"
+                        assert self.state["tcp_timestamps"]["value"] == "1", "demo timestamps not enabled"
+                        assert not self.enable_tcp.get_sensitive(), "already enabled timestamps can be rewritten"
+                        print("GTK demo smoke: PASS (29 operations, settings, versions, diagnostics, runtime timestamps, Discord cache, error details)")
                     except AssertionError as error:
                         print(f"GTK demo smoke: FAILED ({error})")
                 self.quit()
@@ -790,7 +939,13 @@ def main(argv=None):
                      ("apply", lambda: self.backend.apply_update(self.state["pending"])),
                      ("logs", self.backend.logs),
                      ("stop", lambda: self.backend.service_action("stop")),
-                     ("read-status", self.backend.read_status)]
+                     ("read-status", self.backend.read_status),
+                     ("read-tcp-timestamps", self.backend.read_tcp_timestamps),
+                     ("enable-tcp-timestamps", lambda: self.backend.enable_tcp_timestamps(self.state["tcp_timestamps"]["value"])),
+                     ("diagnostics", self.backend.diagnostics),
+                     ("scan-discord", self.backend.scan_discord),
+                     ("clean-discord", lambda: self.backend.clean_discord(self.state["discord"]["instances"][0]["id"],
+                         self.state["discord"]["instances"][0]["token"]))]
             if self.smoke_index < len(steps):
                 action, step = steps[self.smoke_index]
                 self.smoke_index += 1

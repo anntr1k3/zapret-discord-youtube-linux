@@ -35,6 +35,43 @@ def load_version_module():
     return module
 
 
+def load_diagnostics_module():
+    path = Path(__file__).resolve().parents[1] / "lib/diagnostics.py"
+    spec = importlib.util.spec_from_file_location("gui_diagnostics", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_discord_cache_module():
+    path = Path(__file__).resolve().parents[1] / "lib/discord_cache.py"
+    spec = importlib.util.spec_from_file_location("gui_discord_cache", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_diagnostics_report(report, target):
+    if report is None:
+        raise ValueError("Сначала выполните диагностику")
+    target = Path(target)
+    if not target.is_absolute() or target.is_dir():
+        raise ValueError("Выберите абсолютный путь файла отчёта")
+    if target.is_symlink():
+        raise OSError("Экспорт в symlink не допускается")
+    encoded = (json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    fd, temporary = tempfile.mkstemp(prefix=".diagnostics-export-", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return {"target": str(target), "size": len(encoded)}
+
+
 class Backend:
     demo = False
 
@@ -44,6 +81,9 @@ class Backend:
         self.cache = Path(cache or Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "zapret-strategy-sync")
         self.loaded_config = None
         self.status_report = None
+        self.diagnostic_report = None
+        self.discord_report = None
+        self.tcp_state = None
 
     @staticmethod
     def command(argv, **kwargs):
@@ -121,7 +161,54 @@ class Backend:
                 "update_error": update_error, "hosts": self.hosts_status(),
                 "auto_check": auto_check, "versions": versions,
                 "status_supported": self.status_supported(), "service_report": self.status_report,
-                "unit_error": unit_error}
+                "unit_error": unit_error, "diagnostics": self.diagnostic_report, "discord": self.discord_report,
+                "tcp_timestamps_supported": self.tcp_timestamps_supported(), "tcp_timestamps": self.tcp_state}
+
+    def tcp_timestamps_supported(self):
+        try:
+            return b"# tcp-timestamps-enable-v1:" in self.trusted_helper().read_bytes()
+        except (OSError, RuntimeError):
+            return False
+
+    def read_tcp_timestamps(self):
+        if not self.tcp_timestamps_supported():
+            raise RuntimeError("Установленный помощник не поддерживает действие TCP timestamps. Автоматическое обновление не выполняется.")
+        self.tcp_state = None
+        self.tcp_state = self.call_helper("read-tcp-timestamps", {})
+        return self.tcp_state
+
+    def enable_tcp_timestamps(self, expected_value):
+        if not self.tcp_timestamps_supported():
+            raise RuntimeError("Установленный помощник не поддерживает действие TCP timestamps. Автоматическое обновление не выполняется.")
+        self.tcp_state = None
+        self.diagnostic_report = None
+        result = self.call_helper("enable-tcp-timestamps", {"expected_value": expected_value})
+        self.tcp_state = result["tcp_timestamps"]
+        return result
+
+    def discord_manager(self):
+        return load_discord_cache_module().CacheManager(config=os.environ.get("XDG_CONFIG_HOME"))
+
+    def scan_discord(self):
+        self.discord_report = None
+        self.discord_report = self.discord_manager().discover()
+        return copy.deepcopy(self.discord_report)
+
+    def clean_discord(self, instance, token):
+        self.discord_report = None
+        result = self.discord_manager().clean(instance, token)
+        self.scan_discord()
+        return result
+
+    def diagnostics(self):
+        self.diagnostic_report = None
+        managed = self.managed()
+        data = Path("/etc/zapret-discord-youtube") if managed else self.workspace
+        self.diagnostic_report = load_diagnostics_module().collect(self.base(), data, managed=managed)
+        return copy.deepcopy(self.diagnostic_report)
+
+    def export_diagnostics(self, target):
+        return write_diagnostics_report(self.diagnostic_report, target)
 
     def status_supported(self):
         try:
@@ -168,7 +255,7 @@ class Backend:
 
     def call_helper(self, action, payload):
         helper = self.trusted_helper()
-        if action not in ("read-config", "read-status"):
+        if action not in ("read-config", "read-status", "read-tcp-timestamps"):
             self.status_report = None
         result = subprocess.run(["/usr/bin/pkexec", "/usr/bin/python3", "-I", str(helper), action],
                                 input=json.dumps(payload), capture_output=True, text=True, check=False)
@@ -304,6 +391,11 @@ class DemoBackend:
         self.auto_check_enabled = False
         self.last_update_check = None
         self.status_report = None
+        self.diagnostic_report = None
+        self.discord_report = None
+        self.demo_discord_cleaned = False
+        self.tcp_state = None
+        self.demo_tcp_value = "0"
         self.hosts_data = b"127.0.0.1 localhost\n::1 localhost\n192.0.2.10 keep.example\n"
         self.demo_hosts_body = (b"203.0.113.10 github.com\n203.0.113.11 example.invalid\n"
                                 b"2001:db8::10 example.invalid\n")
@@ -338,7 +430,58 @@ class DemoBackend:
                                              "last_check": self.last_update_check,
                                              "preparation_enabled": False, "error": None},
                               "versions": self.versions(), "status_supported": True,
-                              "service_report": self.status_report})
+                              "service_report": self.status_report, "diagnostics": self.diagnostic_report,
+                              "discord": self.discord_report, "tcp_timestamps_supported": True,
+                              "tcp_timestamps": self.tcp_state})
+
+    def read_tcp_timestamps(self):
+        self.tcp_state = {"value": self.demo_tcp_value, "enabled": self.demo_tcp_value != "0",
+                          "scope": "running-kernel", "checked_at": "демонстрация", "error": None}
+        return copy.deepcopy(self.tcp_state)
+
+    def enable_tcp_timestamps(self, expected_value):
+        if expected_value != self.demo_tcp_value:
+            raise ValueError("Изменился снимок TCP timestamps (демо)")
+        changed = self.demo_tcp_value == "0"
+        if changed:
+            self.demo_tcp_value = "1"
+        self.diagnostic_report = None
+        return {"changed": changed, "tcp_timestamps": self.read_tcp_timestamps()}
+
+    def scan_discord(self):
+        self.discord_report = {"processes": {"state": "clear", "pids": []}, "instances": [
+            {"id": "native-stable", "label": "Discord Stable · native (демо)", "path": "/demo-only/.config/discord",
+             "files": 0 if self.demo_discord_cleaned else 12, "bytes": 0 if self.demo_discord_cleaned else 4096,
+             "token": "e" * 64 if self.demo_discord_cleaned else "d" * 64, "error": None,
+             "caches": [] if self.demo_discord_cleaned else [
+                 {"path": "/demo-only/.config/discord/Cache", "files": 10, "bytes": 3072},
+                 {"path": "/demo-only/.config/discord/GPUCache", "files": 2, "bytes": 1024}]}]}
+        return copy.deepcopy(self.discord_report)
+
+    def clean_discord(self, instance, token):
+        item = self.scan_discord()["instances"][0]
+        if instance != item["id"] or token != item["token"]:
+            raise ValueError("Изменился подтверждённый демонстрационный кэш")
+        self.demo_discord_cleaned = True
+        self.scan_discord()
+        return {"id": instance, "removed_files": item["files"], "removed_bytes": item["bytes"]}
+
+    def diagnostics(self):
+        self.diagnostic_report = {"schema": 1, "checked_at": "демонстрация", "checks": [
+            {"id": "dependencies", "title": "Команды и backend", "state": "observed",
+             "summary": "Демонстрация: зависимости не проверялись", "details": ["nft, curl, python3: имитация наличия"]},
+            {"id": "proxy-environment", "title": "Прокси", "state": "warning",
+             "summary": "Демонстрационный прокси; учётные данные скрыты", "details": ["https://proxy.example:8443"]},
+            {"id": "nfqueue", "title": "NFQUEUE", "state": "unknown",
+             "summary": "Имитация недоступных сведений", "details": []},
+            {"id": "windows-only", "title": "Проверки Windows", "state": "not-applicable",
+             "summary": "WinDivert/BFE не применяются в Linux", "details": []}],
+            "limitations": ["Демонстрация: файлы и процессы системы не читались; исправления не выполнялись.",
+                            "Системные настройки не определяют браузерный DoH."]}
+        return copy.deepcopy(self.diagnostic_report)
+
+    def export_diagnostics(self, target):
+        return write_diagnostics_report(self.diagnostic_report, target)
 
     def read_status(self):
         state = "present" if self.active else "absent"

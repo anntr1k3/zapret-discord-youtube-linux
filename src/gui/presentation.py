@@ -5,6 +5,12 @@ MESSAGES = {
     "refresh": ("Обновляем состояние…", None),
     "read-config": ("Читаем настройки · может потребоваться авторизация…", "Настройки прочитаны"),
     "read-status": ("Читаем расширенный статус · может потребоваться авторизация…", "Снимок расширенного статуса получен"),
+    "diagnostics": ("Собираем локальную диагностику · без изменений системы…", "Отчёт диагностики собран"),
+    "export-diagnostics": ("Сохраняем отчёт диагностики…", "Отчёт диагностики сохранён"),
+    "scan-discord": ("Проверяем поддерживаемые профили Discord…", "Предпросмотр кэша Discord обновлён"),
+    "clean-discord": ("Очищаем только подтверждённый кэш Discord…", "Подтверждённый кэш Discord очищен"),
+    "read-tcp-timestamps": ("Читаем TCP timestamps · может потребоваться авторизация…", "TCP timestamps прочитаны"),
+    "enable-tcp-timestamps": ("Включаем TCP timestamps · может потребоваться авторизация…", "TCP timestamps включены без постоянной настройки"),
     "start": ("Запускаем сервис · может потребоваться авторизация…", "Команда запуска выполнена"),
     "stop": ("Останавливаем сервис · может потребоваться авторизация…", "Команда остановки выполнена"),
     "restart": ("Перезапускаем сервис · может потребоваться авторизация…", "Команда перезапуска выполнена"),
@@ -28,6 +34,22 @@ MESSAGES = {
 
 def operation_messages(action):
     return MESSAGES[action]
+
+
+def diagnostics_text(report):
+    if not report:
+        return "Диагностика ещё не выполнялась. Запускается только по нажатию, без root, сетевых проб и исправлений."
+    labels = {"observed": "Наблюдение", "warning": "Внимание", "unknown": "Неизвестно",
+              "not-applicable": "Неприменимо"}
+    lines = ["Локальная диагностика · " + str(report.get("checked_at", "время неизвестно")),
+             "Снимок не обновляется автоматически. Наблюдения не означают исправность или эффективность обхода DPI."]
+    for item in report.get("checks", []):
+        lines += ["", f"[{labels.get(item.get('state'), 'Неизвестно')}] {item.get('title', '')}",
+                  str(item.get("summary", ""))]
+        lines.extend("  · " + str(detail) for detail in item.get("details", []))
+    lines += ["", "Ограничения и приватность:"]
+    lines.extend("  · " + str(value) for value in report.get("limitations", []))
+    return "\n".join(lines)
 
 
 def service_state_title(state):
