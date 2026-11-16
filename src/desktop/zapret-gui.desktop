@@ -1,9 +1,13 @@
 [Desktop Entry]
 Type=Application
 Name=Zapret
+GenericName=DPI Circumvention GUI
+GenericName[ru]=Обход блокировок и управление сервисом
 Comment=Управление сервисом zapret и стратегиями Flowseal
 Exec=/usr/bin/python3 /opt/zapret-discord-youtube/current/src/gui/launch.py
-Icon=network-workgroup-symbolic
+Icon=zapret-gui
 Terminal=false
-Categories=Network;Settings;
+Categories=Network;GTK;
 StartupNotify=true
+Keywords=zapret;discord;youtube;dpi;bypass;vpn;proxy;
+Keywords[ru]=запрет;дискорд;ютуб;обход;блокировки;
