@@ -181,7 +181,14 @@ class Backend:
                 "unit_error": unit_error, "diagnostics": self.diagnostic_report, "discord": self.discord_report,
                 "tcp_timestamps_supported": self.tcp_timestamps_supported(), "tcp_timestamps": self.tcp_state,
                 "tester_supported": self.tester_supported(), "tester": self.tester_preview(),
-                "tester_report_summary": self.tester_last_report is not None}
+                "tester_report_summary": self.tester_last_report is not None,
+                "remove_supported": self.remove_supported()}
+
+    def remove_supported(self):
+        try:
+            return b"# remove-service-v1:" in self.trusted_helper().read_bytes()
+        except (OSError, RuntimeError):
+            return False
 
     def tcp_timestamps_supported(self):
         try:
@@ -472,12 +479,60 @@ class Backend:
                                 capture_output=True, text=True, check=False, timeout=15)
         return result.stdout + ("\n" + result.stderr if result.stderr else "")
 
+    def remove_service(self, purge=False):
+        if not self.managed():
+            raise RuntimeError("Управляемый системный сервис не установлен")
+        result = self.call_helper("remove-service", {"purge": bool(purge)})
+        self.loaded_config = None
+        self.status_report = None
+        return result
+
+    def install_service(self, strategy=None, start=True):
+        if self.managed():
+            raise RuntimeError("Управляемый системный сервис уже установлен")
+        install_script = self.workspace / "install.py"
+        if not install_script.is_file():
+            raise RuntimeError(f"Файл {install_script} не найден в рабочем каталоге")
+        if strategy is not None:
+            if not isinstance(strategy, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.bat", strategy):
+                raise ValueError("Некорректное имя стратегии")
+            if strategy not in self.profiles():
+                raise ValueError(f"Стратегия {strategy} отсутствует в рабочем каталоге")
+            conf_path = self.workspace / "conf.env"
+            if conf_path.is_file():
+                old_conf = conf_path.read_bytes()
+                pattern = rb"(?m)^strategy=[^\r\n]*"
+                replacement = b"strategy=" + strategy.encode("ascii")
+                new_conf, count = re.subn(pattern, lambda _: replacement, old_conf, count=1)
+                if not count:
+                    if new_conf and not new_conf.endswith(b"\n"):
+                        new_conf += b"\n"
+                    new_conf += replacement + b"\n"
+                conf_path.write_bytes(new_conf)
+            else:
+                initial_conf = (f"interface=any\ngamefiltertcp=false\ngamefilterudp=false\n"
+                                f"strategy={strategy}\nfirewall_backend=auto\n").encode("ascii")
+                conf_path.write_bytes(initial_conf)
+        cmd = ["/usr/bin/pkexec", "/usr/bin/python3", "-I", str(install_script), "install",
+               "--source", str(self.workspace)]
+        if start:
+            cmd.append("--start")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode in (126, 127):
+            raise RuntimeError("Авторизация отменена или отклонена. Никакой успех не предполагается — обновите статус.")
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"Ошибка установки (код {result.returncode})")
+        self.loaded_config = None
+        self.status_report = None
+        return {"installed": True, "started": bool(start)}
+
 
 class DemoBackend:
     """No subprocesses, filesystem access or privileged operations in this mode."""
     demo = True
 
     def __init__(self):
+        self.installed = True
         self.active = False
         self.enabled = False
         self.strategy = "general.bat"
@@ -498,7 +553,7 @@ class DemoBackend:
                                 b"2001:db8::10 example.invalid\n")
         self.demo_hosts_sha = hashlib.sha256(self.demo_hosts_body).hexdigest()
         self.loaded_config = {"config": {"strategy": self.strategy, "gamefiltertcp": "false", "gamefilterudp": "false"},
-                              "sha256": "0" * 64, "capabilities": ["game-filter-ranges-v1", "ipset-mode-v1", "active-fakes-v1", "ipset-update-v1", "hosts-update-v1"],
+                              "sha256": "0" * 64, "capabilities": ["game-filter-ranges-v1", "ipset-mode-v1", "active-fakes-v1", "ipset-update-v1", "hosts-update-v1", "remove-service-v1"],
                               "ipset": {"configured_mode": "legacy", "effective_mode": "loaded", "loaded_available": True,
                                         "loaded_source": "/demo-only/ipset-loaded.txt", "loaded_sha256": "c" * 64,
                                         "loaded_entries": 128, "warning": None},
@@ -513,11 +568,11 @@ class DemoBackend:
                 "matched_name": None, "warning": None, "available": available}
 
     def snapshot(self):
-        return copy.deepcopy({"installed": True, "unit_present": True, "active": self.active,
+        return copy.deepcopy({"installed": self.installed, "unit_present": self.installed, "active": self.active,
                               "state": "active" if self.active else "inactive", "enabled": self.enabled,
-                              "detail": "Симуляция — система не изменяется", "helper_ready": True,
+                              "detail": "Симуляция — система не изменяется" if self.installed else "Симуляция — сервис не установлен", "helper_ready": self.installed,
                               "profiles": ["general.bat", "general_alt.bat", "general_fake_tls_auto.bat"],
-                              "config": self.loaded_config,
+                              "config": self.loaded_config if self.installed else None,
                               "pending": self.pending if self.pending and self.pending["revision"] != self.revision else None,
                               "revision": self.revision,
                               "update_error": None, "hosts": self.hosts_status(),
@@ -526,12 +581,13 @@ class DemoBackend:
                                              "next_check": "завтра, 00:15" if self.auto_check_enabled else None,
                                              "last_check": self.last_update_check,
                                              "preparation_enabled": False, "error": None},
-                              "versions": self.versions(), "status_supported": True,
+                              "versions": self.versions(), "status_supported": self.installed,
                               "service_report": self.status_report, "diagnostics": self.diagnostic_report,
-                              "discord": self.discord_report, "tcp_timestamps_supported": True,
+                              "discord": self.discord_report, "tcp_timestamps_supported": self.installed,
                               "tcp_timestamps": self.tcp_state,
-                              "tester_supported": "demo", "tester": self.tester_preview(),
-                              "tester_report_summary": self.tester_last_report is not None})
+                              "tester_supported": "demo" if self.installed else False, "tester": self.tester_preview(),
+                              "tester_report_summary": self.tester_last_report is not None,
+                              "remove_supported": self.installed})
 
     def tester_preview(self):
         targets = [{"name": "DiscordMain", "url": "https://discord.com", "ping": "discord.com"},
@@ -798,6 +854,44 @@ class DemoBackend:
     def rollback(self):
         self.revision = None
         return {"rolled_back": True}
+
+    def remove_service(self, purge=False):
+        if not self.installed:
+            raise RuntimeError("Управляемый системный сервис не установлен (демо)")
+        self.installed = False
+        self.active = False
+        self.saved_config = None if purge else copy.deepcopy(self.loaded_config)
+        self.status_report = None
+        self.loaded_config = None
+        return {"removed": True, "purged": bool(purge)}
+
+    def install_service(self, strategy=None, start=True):
+        if self.installed:
+            raise RuntimeError("Управляемый системный сервис уже установлен (демо)")
+        if strategy and strategy not in self.snapshot()["profiles"]:
+            raise ValueError(f"Unknown demo profile: {strategy}")
+        if strategy:
+            self.strategy = strategy
+        self.installed = True
+        self.active = bool(start)
+        self.enabled = True
+        if getattr(self, "saved_config", None):
+            self.loaded_config = copy.deepcopy(self.saved_config)
+            self.loaded_config["config"]["strategy"] = self.strategy
+        else:
+            self.loaded_config = {
+                "config": {"strategy": self.strategy, "gamefiltertcp": "false", "gamefilterudp": "false"},
+                "sha256": "0" * 64,
+                "capabilities": ["game-filter-ranges-v1", "ipset-mode-v1", "active-fakes-v1",
+                                 "ipset-update-v1", "hosts-update-v1", "remove-service-v1"],
+                "ipset": {"configured_mode": "legacy", "effective_mode": "loaded", "loaded_available": True,
+                          "loaded_source": "/demo-only/ipset-loaded.txt", "loaded_sha256": "c" * 64,
+                          "loaded_entries": 128, "warning": None},
+                "fakes_usage": {"discord": 3, "gameudp": 1},
+                "fakes": {"discord": self.demo_fakes("discord"), "gameudp": self.demo_fakes("gameudp")}
+            }
+        self.status_report = None
+        return {"installed": True, "started": bool(start)}
 
     def logs(self):
         return "[ДЕМО] Интерфейс готов.\n[ДЕМО] Ни сервис, ни firewall, ни настройки не изменяются.\n"

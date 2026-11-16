@@ -36,7 +36,7 @@ class PresentationTests(unittest.TestCase):
                        "set-autostart", "set-game-filter", "set-ipset-mode", "set-active-fakes",
                        "fetch-ipset", "update-ipset",
                        "check", "prepare", "apply", "logs",
-                       "tester-run", "export-tester"):
+                       "tester-run", "export-tester", "remove-service", "install-service"):
             busy, success = self.presentation.operation_messages(action)
             self.assertTrue(busy.endswith("…"))
             self.assertTrue(success)
@@ -219,6 +219,64 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(result["config"]["gamefilterudp_ports"], "3000,4000-5000")
         self.assertTrue(demo.snapshot()["active"])
 
+    def test_remove_service_requires_managed(self):
+        self.backend.managed = mock.Mock(return_value=False)
+        with self.assertRaisesRegex(RuntimeError, "не установлен"):
+            self.backend.remove_service()
+
+    def test_remove_service_calls_helper_protocol(self):
+        self.backend.managed = mock.Mock(return_value=True)
+        self.backend.call_helper = mock.Mock(return_value={"removed": True, "purged": False})
+        self.backend.loaded_config = {"some": "config"}
+        self.backend.status_report = {"some": "report"}
+        result = self.backend.remove_service(purge=False)
+        self.assertEqual(result, {"removed": True, "purged": False})
+        self.backend.call_helper.assert_called_once_with("remove-service", {"purge": False})
+        self.assertIsNone(self.backend.loaded_config)
+        self.assertIsNone(self.backend.status_report)
+
+    def test_install_service_rejects_already_managed(self):
+        self.backend.managed = mock.Mock(return_value=True)
+        with self.assertRaisesRegex(RuntimeError, "уже установлен"):
+            self.backend.install_service()
+
+    def test_install_service_validates_strategy_and_executes_pkexec(self):
+        self.backend.managed = mock.Mock(return_value=False)
+        self.backend.profiles = mock.Mock(return_value=["general.bat", "general_alt.bat"])
+        with self.assertRaisesRegex(ValueError, "Некорректное имя"):
+            self.backend.install_service(strategy="bad/name.sh")
+        with self.assertRaisesRegex(ValueError, "отсутствует"):
+            self.backend.install_service(strategy="missing.bat")
+        with mock.patch.object(self.module.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 0, "installed", "")) as run:
+            result = self.backend.install_service(strategy="general.bat", start=True)
+        self.assertEqual(result, {"installed": True, "started": True})
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:3], ["/usr/bin/pkexec", "/usr/bin/python3", "-I"])
+        self.assertTrue(argv[3].endswith("install.py"))
+        self.assertEqual(argv[4:7], ["install", "--source", str(ROOT)])
+        self.assertEqual(argv[7], "--start")
+
+    def test_demo_service_lifecycle_remove_and_install(self):
+        demo = self.module.DemoBackend()
+        self.assertTrue(demo.snapshot()["installed"])
+        remove_res = demo.remove_service(purge=False)
+        self.assertEqual(remove_res, {"removed": True, "purged": False})
+        self.assertFalse(demo.snapshot()["installed"])
+        self.assertFalse(demo.snapshot()["active"])
+        self.assertIsNone(demo.snapshot()["config"])
+        with self.assertRaisesRegex(RuntimeError, "не установлен"):
+            demo.remove_service()
+        with self.assertRaisesRegex(ValueError, "Unknown demo profile"):
+            demo.install_service(strategy="nonexistent.bat")
+        install_res = demo.install_service(strategy="general_alt.bat", start=True)
+        self.assertEqual(install_res, {"installed": True, "started": True})
+        self.assertTrue(demo.snapshot()["installed"])
+        self.assertTrue(demo.snapshot()["active"])
+        self.assertEqual(demo.snapshot()["config"]["config"]["strategy"], "general_alt.bat")
+        with self.assertRaisesRegex(RuntimeError, "уже установлен"):
+            demo.install_service()
+
 
 class HelperTests(unittest.TestCase):
     def setUp(self):
@@ -380,6 +438,29 @@ class HelperTests(unittest.TestCase):
         self.helper.dispatch(self.installer, "set-game-filter", self.game_payload(digest=result["sha256"]))
         self.assertEqual(self.installer.systemd.calls, [])
         self.assertEqual(self.config.read_bytes(), content)
+
+    def test_remove_service_unlinks_service_and_releases(self):
+        result = self.helper.dispatch(self.installer, "remove-service", {"purge": False})
+        self.assertEqual(result, {"removed": True, "purged": False})
+        self.assertIsNone(self.installer.state())
+        self.assertFalse(self.installer.unit.exists())
+        self.assertFalse(self.installer.current.exists())
+        self.assertTrue(self.installer.data.is_dir())
+        self.assertFalse(self.installer.systemd.active)
+        self.assertFalse(self.installer.systemd.enabled)
+
+    def test_remove_service_purges_data_when_flag_is_true(self):
+        result = self.helper.dispatch(self.installer, "remove-service", {"purge": True})
+        self.assertEqual(result, {"removed": True, "purged": True})
+        self.assertIsNone(self.installer.state())
+        self.assertFalse(self.installer.data.exists())
+        self.assertFalse(self.installer.state_dir.exists())
+
+    def test_remove_service_validates_payload(self):
+        for payload in ({}, {"purge": "true"}, {"purge": 1}, {"extra": False}):
+            with self.subTest(payload=payload):
+                with self.assertRaises(ValueError):
+                    self.helper.dispatch(self.installer, "remove-service", payload)
 
 
 if __name__ == "__main__":

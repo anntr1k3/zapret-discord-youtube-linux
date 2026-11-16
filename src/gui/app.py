@@ -104,8 +104,12 @@ def main(argv=None):
             self.restart = self.button(row, "Перезапустить", lambda: self.service("restart"))
             self.button(page, "Обновить состояние", self.refresh)
             self.autostart = self.button(page, "Автозапуск", self.toggle_autostart)
-            page.append(Gtk.Label(label="Управляются только процессы установленного systemd-сервиса.\nРучной запуск service.sh это окно не останавливает.", wrap=True, xalign=0))
-            page.append(Gtk.Separator())
+            self.install_btn = self.button(page, "Установить системный сервис…", self.install_service_action)
+            self.remove_btn = self.button(page, "Удалить системный сервис…", self.remove_service_action)
+            self.service_note = Gtk.Label(label="Управляются только процессы установленного systemd-сервиса.\nРучной запуск service.sh это окно не останавливает.", wrap=True, xalign=0)
+            page.append(self.service_note)
+            self.service_sep = Gtk.Separator()
+            page.append(self.service_sep)
             self.read_service_status = self.button(page, "Прочитать расширенный статус…",
                 lambda: self.run_operation(self.backend.read_status, action="read-status"))
             self.service_report = Gtk.Label(wrap=True, xalign=0, selectable=True)
@@ -399,7 +403,7 @@ def main(argv=None):
             installed = state["installed"]
             ready = state["helper_ready"]
             self.status.set_text(service_state_title(state))
-            self.detail.set_text(f"Состояние: {state['state']} · {state['detail']}" if installed else "Для начала нужна ручная установка через install.py. Окно не устанавливает приложение и не запускает root-код из checkout.")
+            self.detail.set_text(f"Состояние: {state['state']} · {state['detail']}" if installed else "Системная служба zapret не установлена. Нажмите «Установить системный сервис…» для установки.")
             if state.get("unit_error"):
                 self.status.set_text("Состояние сервиса неизвестно")
                 self.detail.set_text(state["unit_error"])
@@ -410,6 +414,18 @@ def main(argv=None):
             self.service_report.set_text(report)
             if installed and not ready:
                 self.detail.set_text(self.detail.get_text() + "\nПомощник отсутствует или небезопасен. Обновите управляемую установку через install.py update; код из checkout не повышается до root.")
+            self.start.set_visible(installed)
+            self.stop.set_visible(installed)
+            self.restart.set_visible(installed)
+            self.autostart.set_visible(installed)
+            self.service_note.set_visible(installed)
+            self.service_sep.set_visible(installed)
+            self.read_service_status.set_visible(installed)
+            self.service_report.set_visible(installed)
+            self.install_btn.set_visible(not installed)
+            self.install_btn.set_sensitive(not self.busy)
+            self.remove_btn.set_visible(installed)
+            self.remove_btn.set_sensitive(installed and ready and state.get("remove_supported", True))
             self.start.set_sensitive(installed and state["state"] in ("inactive", "failed"))
             self.stop.set_sensitive(installed and state["active"])
             self.restart.set_sensitive(installed and state["active"])
@@ -577,6 +593,59 @@ def main(argv=None):
         def toggle_autostart(self):
             enabled = not self.state.get("enabled", False)
             self.confirm("Автозапуск", "Изменить запуск сервиса при загрузке системы? Текущее состояние сервиса не изменится.", lambda: self.backend.set_autostart(enabled), action="set-autostart")
+
+        def install_service_action(self):
+            if self.busy or self.state.get("installed"):
+                return
+            dialog = Adw.AlertDialog(heading="Установка системного сервиса",
+                                     body="Будет выполнена установка в /opt/zapret-discord-youtube и создан systemd-сервис.\nМожет потребоваться авторизация администратора.")
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            box.append(Gtk.Label(label="Стратегия по умолчанию:", xalign=0))
+            profiles = self.state.get("profiles", [])
+            combo = Gtk.DropDown(model=Gtk.StringList.new(profiles))
+            if profiles:
+                idx = profiles.index("general.bat") if "general.bat" in profiles else 0
+                combo.set_selected(idx)
+            box.append(combo)
+            start_check = Gtk.CheckButton(label="Запустить и включить автозапуск сразу после установки", active=True)
+            box.append(start_check)
+            dialog.set_extra_child(box)
+            dialog.add_response("cancel", "Отмена")
+            dialog.add_response("install", "Установить")
+            dialog.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
+            dialog.set_default_response("cancel")
+            dialog.set_close_response("cancel")
+            def on_response(source, response):
+                if response == "install":
+                    idx = combo.get_selected()
+                    chosen = profiles[idx] if idx < len(profiles) else (profiles[0] if profiles else "general.bat")
+                    start_now = start_check.get_active()
+                    self.run_operation(lambda: self.backend.install_service(chosen, start=start_now), action="install-service")
+            dialog.connect("response", on_response)
+            dialog.present(self.window)
+            return dialog
+
+        def remove_service_action(self):
+            if self.busy or not self.state.get("installed"):
+                return
+            dialog = Adw.AlertDialog(heading="Удаление системного сервиса",
+                                     body="Системный сервис zapret_discord_youtube будет остановлен, отключён из автозапуска и удалён из /opt/zapret-discord-youtube.\n\nМожет потребоваться авторизация администратора.")
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            purge_check = Gtk.CheckButton(label="Удалить также пользовательские настройки (/etc/zapret-discord-youtube)", active=False)
+            box.append(purge_check)
+            dialog.set_extra_child(box)
+            dialog.add_response("cancel", "Отмена")
+            dialog.add_response("remove", "Удалить")
+            dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+            dialog.set_default_response("cancel")
+            dialog.set_close_response("cancel")
+            def on_response(source, response):
+                if response == "remove":
+                    purge = purge_check.get_active()
+                    self.run_operation(lambda: self.backend.remove_service(purge=purge), action="remove-service")
+            dialog.connect("response", on_response)
+            dialog.present(self.window)
+            return dialog
 
         def toggle_auto_check(self):
             check = self.state.get("auto_check", {})
@@ -1022,7 +1091,7 @@ def main(argv=None):
                         assert [call for call in self.backend.tester_calls if call[0] == "restore"], "state not restored"
                         assert self.state["tester"]["strategies"] == ["demo_a.bat", "demo_b.bat"], "tester strategy list missing"
                         assert self.tester_cancel.get_sensitive() is False, "cancel stays sensitive after run"
-                        print("GTK demo smoke: PASS (31 operations, settings, versions, diagnostics, runtime timestamps, Discord cache, tester, error details)")
+                        print("GTK demo smoke: PASS (34 operations, settings, versions, diagnostics, runtime timestamps, Discord cache, tester, service lifecycle, error details)")
                     except AssertionError as error:
                         print(f"GTK demo smoke: FAILED ({error})")
                 self.quit()
@@ -1032,6 +1101,14 @@ def main(argv=None):
                 assert self.pages.get_sensitive(), "pages remain disabled"
                 success = operation_messages(self.smoke_last_action)[1]
                 assert (self.current_toast.get_title() if self.current_toast else None) == success, f"unexpected notification for {self.smoke_last_action}"
+                if self.smoke_last_action == "remove-service":
+                    assert not self.state["installed"], "service still installed after remove"
+                    assert self.install_btn.get_visible(), "install button hidden after remove"
+                    assert not self.remove_btn.get_visible(), "remove button visible after remove"
+                elif self.smoke_last_action == "install-service":
+                    assert self.state["installed"], "service not installed after install"
+                    assert not self.install_btn.get_visible(), "install button visible after install"
+                    assert self.remove_btn.get_visible(), "remove button hidden after install"
                 if self.smoke_index == 0:
                     unread = dict(self.state, config=None)
                     self.render(unread)
@@ -1093,7 +1170,10 @@ def main(argv=None):
                      ("tester-run", lambda: self.backend.tester_run("standard", ["demo_a.bat", "demo_b.bat"],
                                                                     cancel_event=threading.Event(),
                                                                     progress=self.tester_progress_event)),
-                     ("tester-run", lambda: self.backend.tester_run("dpi", [], custom_dpi_host="example.org"))]
+                     ("tester-run", lambda: self.backend.tester_run("dpi", [], custom_dpi_host="example.org")),
+                     ("remove-service", lambda: self.backend.remove_service(purge=False)),
+                     ("install-service", lambda: self.backend.install_service("general_alt.bat", start=False)),
+                     ("read-status", self.backend.read_status)]
             if self.smoke_index < len(steps):
                 action, step = steps[self.smoke_index]
                 self.smoke_index += 1

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -23,6 +24,7 @@ STREAM_ACTION = "test-session"
 # strategy-tester-v1: installed-only streaming transport and unprivileged GUI runner supported.
 # read-only-service-status-v1: safe for unprivileged capability detection.
 # tcp-timestamps-enable-v1: fixed-key runtime-only action, independent of config.
+# remove-service-v1: installed-only service removal supported.
 ACTIONS = {"read-config": set(), "read-status": set(), "select-profile": {"strategy", "expected_sha256"},
            "read-tcp-timestamps": set(), "enable-tcp-timestamps": {"expected_value"},
            "set-game-filter": {"mode", "tcp_ports", "udp_ports", "expected_sha256"},
@@ -30,12 +32,15 @@ ACTIONS = {"read-config": set(), "read-status": set(), "select-profile": {"strat
            "set-active-fakes": {"discord", "gameudp", "expected_sha256"},
            "update-ipset": {"stage", "sha256", "expected_sha256"},
            "update-hosts": {"stage", "sha256", "expected_hosts_sha256"},
-           "set-autostart": {"enabled"}, "apply-strategies": {"stage", "digest"}, "rollback": set()}
+           "set-autostart": {"enabled"}, "apply-strategies": {"stage", "digest"}, "rollback": set(),
+           "remove-service": {"purge"}}
 
 
 def validate_payload(action, payload):
     if action not in ACTIONS or not isinstance(payload, dict) or set(payload) != ACTIONS[action]:
         raise ValueError("Неизвестная операция или поля административного запроса")
+    if action == "remove-service" and type(payload["purge"]) is not bool:
+        raise ValueError("purge должен быть boolean")
     if action == "enable-tcp-timestamps":
         if not isinstance(payload["expected_value"], str) or payload["expected_value"] not in ("0", "1", "2"):
             raise ValueError("Требуется прочитанное значение TCP timestamps")
@@ -151,6 +156,8 @@ def config_result(installer):
         capabilities.append("service-status-v1")
     if "enable-tcp-timestamps" in ACTIONS:
         capabilities.append("tcp-timestamps-enable-v1")
+    if "remove-service" in ACTIONS:
+        capabilities.append("remove-service-v1")
     fakes = installer.fake_state(values, release)
     strategy_name = values.get("strategy")
     usage = {"discord": 0, "gameudp": 0}
@@ -487,6 +494,20 @@ def dispatch(installer, action, payload):
     if action == "rollback":
         installer.rollback()
         return {"rolled_back": True}
+    if action == "remove-service":
+        installer.remove()
+        purge = payload["purge"]
+        if purge:
+            if installer.data.is_dir():
+                shutil.rmtree(installer.data)
+            if installer.state_dir.is_dir():
+                shutil.rmtree(installer.state_dir)
+            if installer.app.is_dir():
+                try:
+                    installer.app.rmdir()
+                except OSError:
+                    pass
+        return {"removed": True, "purged": purge}
     with installer.operation():
         if action in ("read-tcp-timestamps", "enable-tcp-timestamps"):
             if installer.state() is None:
