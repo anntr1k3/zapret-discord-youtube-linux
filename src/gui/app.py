@@ -284,7 +284,16 @@ def main(argv=None):
             page.append(scroll)
             page.append(Gtk.Label(label="Показаны только сообщения, доступные текущему пользователю.\nПустой журнал не означает отсутствие ошибок сервиса.", wrap=True, xalign=0))
             self.window.present()
+            if args.smoke_test:
+                GLib.timeout_add_seconds(30, self.smoke_watchdog)
             self.refresh()
+
+        def smoke_watchdog(self):
+            if not self.failed:
+                print("GTK demo smoke: FAILED (watchdog timeout after 30s)")
+                self.failed = True
+            self.quit()
+            return GLib.SOURCE_REMOVE
 
         def page(self, stack, name, title):
             scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
@@ -1092,7 +1101,7 @@ def main(argv=None):
                         assert self.state["tester"]["strategies"] == ["demo_a.bat", "demo_b.bat"], "tester strategy list missing"
                         assert self.tester_cancel.get_sensitive() is False, "cancel stays sensitive after run"
                         print("GTK demo smoke: PASS (34 operations, settings, versions, diagnostics, runtime timestamps, Discord cache, tester, service lifecycle, error details)")
-                    except AssertionError as error:
+                    except Exception as error:
                         print(f"GTK demo smoke: FAILED ({error})")
                 self.quit()
                 return GLib.SOURCE_REMOVE
@@ -1133,7 +1142,7 @@ def main(argv=None):
                     assert not self.save_fakes.get_sensitive(), "old helper can edit fakes"
                     assert not self.hosts_update.get_sensitive(), "old helper can update hosts"
                     self.render(self.backend.snapshot())
-            except AssertionError as error:
+            except Exception as error:
                 self.failed = True
                 print(f"GTK demo smoke: FAILED ({error})")
                 self.quit()
