@@ -2,20 +2,17 @@
 
 # 🎧 Zapret Discord YouTube Linux 📺
 
-### Plug-And-Play адаптер для обхода замедления YouTube на Linux
+### Автономный порт и адаптер обхода замедления Discord & YouTube для Linux
 
-На базе стратегий [Flowseal](https://github.com/Flowseal/zapret-discord-youtube) и [zapret](https://github.com/bol-van/zapret) от bol-van
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/anntr1k3/zapret-discord-youtube-linux?style=social)](https://github.com/anntr1k3/zapret-discord-youtube-linux/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/anntr1k3/zapret-discord-youtube-linux?style=social)](https://github.com/anntr1k3/zapret-discord-youtube-linux/network/members)
+
+На базе стратегий [Flowseal](https://github.com/Flowseal/zapret-discord-youtube) и утилиты [zapret](https://github.com/bol-van/zapret) от bol-van  
+Соавтор первоначальной адаптации: [Sergeydigl3](https://github.com/Sergeydigl3/zapret-discord-youtube-linux)
 
 **Проверено на:**
-Ubuntu 24.04 • Debian 12 • Arch Linux • Gentoo Linux
-
-[![Telegram Channel](https://img.shields.io/badge/Telegram-Канал-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+oOPnF-TKMAIxMjg6)
-[![Telegram Chat](https://img.shields.io/badge/Telegram-Чат-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+mPohxYQQdZoyMjRi)
-
-[![Boosty](https://img.shields.io/badge/Boosty-Сказать_спасибо-FF6154?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEyIDI0QzE4LjYyNzQgMjQgMjQgMTguNjI3NCAyNCAxMkMyNCA1LjM3MjU4IDE4LjYyNzQgMCAxMiAwQzUuMzcyNTggMCAwIDUuMzcyNTggMCAxMkMwIDE4LjYyNzQgNS4zNzI1OCAyNCAxMiAyNFoiIGZpbGw9IndoaXRlIi8+Cjwvc3ZnPgo=&logoColor=white)](https://boosty.to/sergeydigl3/about)
-
-[![GitHub stars](https://img.shields.io/github/stars/Sergeydigl3/zapret-discord-youtube-linux?style=social)](https://github.com/Sergeydigl3/zapret-discord-youtube-linux/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/Sergeydigl3/zapret-discord-youtube-linux?style=social)](https://github.com/Sergeydigl3/zapret-discord-youtube-linux/network/members)
+Ubuntu 24.04 • Debian 12 • Arch Linux • Fedora • Gentoo Linux
 
 </div>
 
@@ -31,7 +28,7 @@ Ubuntu 24.04 • Debian 12 • Arch Linux • Gentoo Linux
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/Sergeydigl3/zapret-discord-youtube-linux.git
+git clone https://github.com/anntr1k3/zapret-discord-youtube-linux.git
 cd zapret-discord-youtube-linux
 
 ./service.sh download-deps --default
@@ -77,7 +74,7 @@ cd zapret-discord-youtube-linux
 - Напрямую: `./service.sh download-deps -z v72.9 -s main`
 - В коде: отредактируйте константы в `src/lib/constants.sh`
 
-Если текущая версия не работает, попробуйте [стабильные релизы](https://github.com/Sergeydigl3/zapret-discord-youtube-linux/releases).
+Если текущая версия не работает, попробуйте [стабильные релизы](https://github.com/anntr1k3/zapret-discord-youtube-linux/releases).
 
 **Сторонние проекты:**
 - [Версия от Snowy-Fluffy](https://github.com/Snowy-Fluffy/zapret.installer)
@@ -348,40 +345,40 @@ dinitctl log zapret_discord_youtube
 2. Попробуйте другие стратегии или воспользуйтесь [автоматическим подбором](#автоматический-подбор-стратегий)
 3. Проверьте [Discussions](https://github.com/Flowseal/zapret-discord-youtube/discussions) — там обсуждают рабочие решения
 
-### Когда создавать Issue/Discussion у меня
+### Когда создавать Issue / Discussion
 
-**Когда писать в [Issues](https://github.com/Sergeydigl3/zapret-discord-youtube-linux/issues):**
-- Ошибки в работе **скрипта адаптера**
-- Вопросы по работе **скрипта адаптера**
-- Предложение добавить стратегию в custom-strategies
+**Когда писать в [Issues](https://github.com/anntr1k3/zapret-discord-youtube-linux/issues):**
+- Ошибки в работе GUI или консольных скриптов адаптера
+- Неисправности в системном сервисе или Polkit root-помощнике
+- Предложения по добавлению новых возможностей в адаптер
 
-**Когда писать в [Discussions](https://github.com/Sergeydigl3/zapret-discord-youtube-linux/discussions):**
-- Не работает YouTube или другой сайт (после проверки репозитория Flowseal)
-- Поиск рабочих стратегий
-- Обмен опытом
-
-**Pull Request приветствуются** (например, поддержка iptables)
+**Когда писать в [Discussions](https://github.com/anntr1k3/zapret-discord-youtube-linux/discussions):**
+- Не работает YouTube или Discord (после проверки основного репозитория Flowseal)
+- Поиск и обсуждение оптимальных рабочих стратегий под конкретных провайдеров
+- Обмен опытом настройки в различных дистрибутивах Linux
 
 ---
 
-## Контрибьюторы
+## 👥 Авторы и благодарности
 
-<div align="center">
+Проект развивается самостоятельно и выражает искреннюю благодарность создателям базовых инструментов:
 
-**Спасибо всем, кто улучшает проект!** 🎉
-
-<a href="https://github.com/Sergeydigl3/zapret-discord-youtube-linux/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Sergeydigl3/zapret-discord-youtube-linux" alt="Contributors" />
-</a>
-
-Хотите видеть здесь свое имя? Сделайте [Pull Request](https://github.com/Sergeydigl3/zapret-discord-youtube-linux/pulls)!
-
-</div>
+- **[bol-van](https://github.com/bol-van/zapret)** — автор фундаментальной утилиты `zapret` и демона `nfqws` (NFQUEUE).
+- **[Flowseal](https://github.com/Flowseal/zapret-discord-youtube)** — автор оригинального Windows-решения `zapret-discord-youtube`, базы стратегий, пакетов фейков и списков доменов/IP.
+- **[Sergeydigl3](https://github.com/Sergeydigl3/zapret-discord-youtube-linux)** — соавтор, создатель первоначальной адаптации скриптов запуска под Linux.
+- **[anntr1k3](https://github.com/anntr1k3/zapret-discord-youtube-linux)** — автор релиза v1.0, графического интерфейса GTK4/libadwaita, безопасного Polkit root-помощника, потокового тестировщика стратегий и углублённой диагностики.
 
 ---
 
-<div align="center">
+## 🤝 Содействие проекту (Contributing)
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Sergeydigl3/zapret-discord-youtube-linux&type=Date)](https://star-history.com/#Sergeydigl3/zapret-discord-youtube-linux&Date)
+Pull Request'ы и сообщения об ошибках приветствуются!
+- Сообщить об ошибке: [Issues](https://github.com/anntr1k3/zapret-discord-youtube-linux/issues)
+- Задать вопрос / Обсудить: [Discussions](https://github.com/anntr1k3/zapret-discord-youtube-linux/discussions)
+- Отправить Pull Request: [Pull Requests](https://github.com/anntr1k3/zapret-discord-youtube-linux/pulls)
 
-</div>
+---
+
+## 📄 Лицензия
+
+Проект распространяется под открытой лицензией [MIT](LICENSE).

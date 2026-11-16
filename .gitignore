@@ -1,9 +1,42 @@
+# Runtime & dependencies
 zapret-latest
 user-lists
 conf.env
-nfqws
-auto_tune_youtube_results.txt
 conf.env.backup
+nfqws
+
+# Strategy tuning results
+auto_tune_youtube_results.txt
 auto_tune_results.txt
+
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE & editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs & temp diagnostics
+*.log
+*.tmp
+zapret-diagnostics*.json
+zapret-tester-report*.txt
+ci_results/
+.local/state/
+
+# OS artifacts
+.DS_Store
+Thumbs.db

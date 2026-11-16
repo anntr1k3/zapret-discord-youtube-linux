@@ -10,7 +10,7 @@ body:
       value: |
         Используйте этот шаблон, если ваш вопрос или проблема не подходят под другие категории.
 
-        > 💡 Для обсуждения стратегий и поиска рабочих конфигураций лучше использовать [Discussions](https://github.com/Sergeydigl3/zapret-discord-youtube-linux/discussions).
+        > 💡 Для обсуждения стратегий и поиска рабочих конфигураций лучше использовать [Discussions](https://github.com/anntr1k3/zapret-discord-youtube-linux/discussions).
 
   - type: textarea
     id: description

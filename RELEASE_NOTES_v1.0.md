@@ -114,7 +114,7 @@ python3 gui.py
 - **[Flowseal](https://github.com/Flowseal/zapret-discord-youtube)** — автор оригинального проекта для Windows, каталога эффективных стратегий, механизмов подмены пакетов (fakes), списков доменов и IPSet.
 - **[bol-van](https://github.com/bol-van/zapret)** — автор фундаментальной утилиты `zapret` и сетевого демона `nfqws` (NFQUEUE bypass daemon).
 - **[Sergeydigl3](https://github.com/Sergeydigl3/zapret-discord-youtube-linux)** — автор первоначальной адаптации скриптов запуска под Linux и ранних идей архитектуры сервиса.
-- **anntr1k3 (kami) & DeepMind Antigravity** — архитектура и реализация автономного релиза v1.0:
+- **anntr1k3 & Antigravity** — архитектура и реализация автономного релиза v1.0:
   - Разработка нативного интерфейса GTK4 / libadwaita с нулевой потребностью в терминале.
   - Разработка защищённого бекенда и доверенного Polkit-помощника.
   - Потоковый IPC-раннер тестировщика стратегий (`StreamingTesterRunner`).

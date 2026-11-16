@@ -1,0 +1,31 @@
+MIT License
+
+Copyright (c) 2016-2026 bol-van (zapret)
+Copyright (c) 2024-2026 Flowseal (zapret-discord-youtube)
+Copyright (c) 2024-2026 Sergeydigl3 (initial Linux port)
+Copyright (c) 2026 anntr1k3 (Linux port v1.0, GTK4/libadwaita GUI & runtime)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+This repository builds upon and contains strategies, scripts, and concepts originating from:
+1. bol-van (https://github.com/bol-van/zapret) — core bypass engine and nfqws utility (MIT License).
+2. Flowseal (https://github.com/Flowseal/zapret-discord-youtube) — Windows bypass strategies and hostlists (MIT License).
+3. Sergeydigl3 (https://github.com/Sergeydigl3/zapret-discord-youtube-linux) — early Linux shell adaptation (MIT License).
