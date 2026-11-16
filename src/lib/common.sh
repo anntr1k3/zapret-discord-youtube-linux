@@ -194,9 +194,27 @@ get_nfqws_pids() {
 
 # Не останавливаем другие установки nfqws.
 stop_nfqws() {
-    local pid
+    local pid service_group="" membership line owned
+    # managed-service-cgroup-stop-v1: systemd start/stop must never signal a
+    # manual engine merely because it uses the same installed executable.
+    if [[ "${SYSTEM_INSTALL:-false}" == true && -n "${INVOCATION_ID:-}" ]]; then
+        service_group=$(elevate systemctl show --property=ControlGroup --value "${SERVICE_NAME}.service") || return 1
+        [[ "$service_group" == /*/"${SERVICE_NAME}.service" &&
+           "$service_group" != *"/../"* && "$service_group" != *"/./"* &&
+           "$service_group" != *$'\n'* ]] || return 1
+    fi
     while IFS= read -r pid; do
         [[ -n "$pid" ]] || continue
+        if [[ -n "$service_group" ]]; then
+            membership=$(elevate cat -- "/proc/$pid/cgroup" 2>/dev/null) || continue
+            owned=false
+            while IFS= read -r line; do
+                if [[ "$line" == "0::$service_group" || "$line" == "0::$service_group/"* ]]; then
+                    owned=true
+                fi
+            done <<< "$membership"
+            [[ "$owned" == true ]] || continue
+        fi
         elevate kill -TERM -- "$pid" 2>/dev/null || true
     done < <(get_nfqws_pids)
 }

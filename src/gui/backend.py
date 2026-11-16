@@ -59,6 +59,14 @@ def load_strategy_tester_module():
     return module
 
 
+def load_strategy_test_client_module():
+    path = Path(__file__).resolve().parents[1] / "lib/strategy_test_client.py"
+    spec = importlib.util.spec_from_file_location("gui_strategy_test_client", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def write_diagnostics_report(report, target):
     if report is None:
         raise ValueError("Сначала выполните диагностику")
@@ -219,7 +227,7 @@ class Backend:
 
     def tester_run(self, test_type="standard", strategies=(), *, targets=None,
                    custom_dpi_host=None, cancel_event=None, execute=None, dpi_entries=None,
-                   progress=None, curl_path=None, ping_path=None):
+                   progress=None, curl_path=None, ping_path=None, runner=None):
         module = load_strategy_tester_module()
         if test_type not in ("standard", "dpi"):
             raise ValueError("Неподдерживаемый тип теста")
@@ -227,8 +235,14 @@ class Backend:
         if strategies and not self.tester_supported():
             raise RuntimeError("Нужен установленный доверенный помощник с поддержкой тестировщика стратегий. "
                                "Обновление системной копии автоматически не выполняется.")
-        if strategies:
-            raise RuntimeError("Запуск стратегий заблокирован: runner установленного помощника ещё не подключён.")
+        if runner is None and strategies:
+            config = self.loaded_config or self.load_config()
+            expected_sha256 = config.get("sha256") if isinstance(config, dict) else None
+            if not expected_sha256:
+                raise RuntimeError("Не удалось определить ревизию конфигурации для запуска сеанса")
+            client_module = load_strategy_test_client_module()
+            runner = client_module.StreamingTesterRunner(
+                self.trusted_helper(), strategies, expected_sha256)
         if targets is None:
             targets, target_problems = module.load_targets(self.base() / "zapret-latest/utils/targets.txt")
         else:
@@ -250,7 +264,7 @@ class Backend:
             if not custom_dpi_host and execute is None:
                 execute = module.public_suite_execute
         session = module.TesterSession(
-            strategies=strategies, targets=targets, test_type=test_type, runner=None,
+            strategies=strategies, targets=targets, test_type=test_type, runner=runner,
             execute=execute, cancel_event=cancel_event, progress=progress,
             curl_path=curl_path, ping_path=ping_path,
             dpi_targets=dpi_targets, payload_path=payload_path)

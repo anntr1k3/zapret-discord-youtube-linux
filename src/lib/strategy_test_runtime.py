@@ -1,7 +1,7 @@
 """Installed tester preflight and isolated execution primitives.
 
-Not exposed by the privileged helper yet. Call prepare under Installer.operation
-from verified installed code only; never pass a GUI-supplied release/path/argv.
+Call prepare under Installer.operation from verified installed helper code only;
+never pass a GUI-supplied release/path/argv. GUI activation is separately gated.
 Persistent config/lists/fakes are not rewritten, even temporarily.
 """
 
@@ -21,7 +21,7 @@ ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "HOME": "/"}
 
 
 def load_sibling(name):
-    if name not in ("strategy_sync", "strategy_test_session", "fake_select"):
+    if name not in ("strategy_sync", "strategy_test_session", "strategy_test_resources", "fake_select"):
         raise ValueError("Unknown trusted tester module")
     path = Path(__file__).with_name(name + ".py")
     spec = importlib.util.spec_from_file_location("installed_tester_" + name, path)
@@ -112,7 +112,10 @@ def prepare(installer, request, *, run=subprocess.run):
             raise ValueError("Invalid installed strategy catalog")
     fakes = load_sibling("fake_select").resolve(repo, installer.data, values)
     plans = {}
-    for name in request["strategies"]:
+    # The original service profile must be parseable too: otherwise we cannot
+    # verify its capture rules before stopping it or validate a later restore.
+    names = list(dict.fromkeys([*request["strategies"], values["strategy"]]))
+    for name in names:
         custom = release / "custom-strategies" / name
         upstream = repo / name
         # lstat rather than exists: a broken symlink must not change precedence.
@@ -142,7 +145,9 @@ def prepare(installer, request, *, run=subprocess.run):
             raise ValueError(f"Installed engine rejected {name}: {(result.stderr or result.stdout)[-2000:]}")
     if read_regular(config, 16384) != original or installer.state()["current"] != state["current"]:
         raise ValueError("Installed configuration/release changed during tester preparation")
-    return {"release": release, "config_bytes": original, "values": values, "plans": plans}
+    return {"release": release, "config_bytes": original, "values": values,
+            "baseline_plan": plans[values["strategy"]],
+            "plans": {name: plans[name] for name in request["strategies"]}}
 
 
 def bound_queues():
@@ -163,17 +168,19 @@ def bound_queues():
 class IsolatedNftRun:
     """One foreground child and one exclusively created session table.
 
-    Internal primitive, not a root entrypoint. The future session owner must
-    hold the installation lock and reserve/check the queue against all firewall
-    backends before constructing this object. Never use the legacy kill script.
+    Internal primitive, not a root entrypoint. The session owner must hold the
+    installation lock throughout selection/binding/cleanup. Rules and bindings
+    are rechecked immediately before spawning. Never use the legacy kill script.
     """
 
     def __init__(self, prepared, *, queue, run=subprocess.run, popen=subprocess.Popen,
-                 queues=bound_queues, clock=time.monotonic, sleep=time.sleep):
+                 queues=bound_queues, clock=time.monotonic, sleep=time.sleep, resources=None):
         if type(queue) is not int or not 1 <= queue <= 65535 or queue == 220:
             raise ValueError("An isolated test queue is required")
         self.prepared, self.queue = prepared, queue
         self.run, self.popen, self.queues = run, popen, queues
+        self.resources = resources if resources is not None else (
+            lambda: load_sibling("strategy_test_resources").observe(run=self.run))
         self.clock, self.sleep = clock, sleep
         token = uuid.uuid4().hex
         self.table = "zapret_test_" + token
@@ -236,6 +243,8 @@ class IsolatedNftRun:
         plan = self.prepared["plans"][name]
         script = self.script(plan)  # Validate interpolation before any side effect.
         release = self.prepared["release"]
+        if self.queue in self.resources():
+            raise RuntimeError("Test queue now conflicts with firewall rules or bindings")
         if self.queue in self.queues():
             raise RuntimeError("Test queue is already bound; refusing to share it")
         try:
@@ -288,3 +297,10 @@ class IsolatedNftRun:
                 errors.append(str(error))
         if errors:
             raise RuntimeError("; ".join(errors))
+
+
+def allocate(prepared, *, run=subprocess.run, **kwargs):
+    """Select, not reserve, a conflict-free queue; start performs a fresh check."""
+    resources = load_sibling("strategy_test_resources")
+    queue = resources.select_queue(resources.observe(run=run))
+    return IsolatedNftRun(prepared, queue=queue, run=run, **kwargs)

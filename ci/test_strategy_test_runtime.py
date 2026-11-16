@@ -67,6 +67,18 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(plan["tcp_ports"], "443")
         self.assertNotIn("--daemon", plan["argv"])
 
+    def test_original_profile_is_validated_even_when_not_selected(self):
+        self.request["strategies"] = ["general_alt12.bat"]
+        prepared = self.prepare()
+        self.assertEqual(set(prepared["plans"]), {"general_alt12.bat"})
+        self.assertEqual(prepared["baseline_plan"]["tcp_ports"], "443")
+        self.assertEqual(self.command.call_count, 2)
+        (self.release / "zapret-latest/general.bat").write_text("invalid original profile\n")
+        self.command.reset_mock()
+        with self.assertRaises(ValueError):
+            self.prepare()
+        self.command.assert_not_called()
+
     def test_dry_run_of_every_plan_has_fixed_globals_and_timeout(self):
         self.prepare()
         self.assertEqual(self.command.call_count, 2)
@@ -167,7 +179,7 @@ class IsolationTests(unittest.TestCase):
              "values": {"interface": "any"},
              "plans": {"general.bat": {"tcp_ports": "443", "udp_ports": "443", "argv": ["--filter-tcp=443"]}}},
             queue=41220, run=self.command, popen=self.popen,
-            queues=mock.Mock(side_effect=[set(), {41220}]))
+            queues=mock.Mock(side_effect=[set(), {41220}]), resources=lambda: set())
 
     def test_foreground_process_and_exclusive_namespaced_nft_table(self):
         self.runner.start("general.bat")
@@ -235,6 +247,19 @@ class IsolationTests(unittest.TestCase):
             self.runner.start("general.bat")
         self.popen.assert_not_called()
         self.command.assert_not_called()
+
+    def test_new_firewall_queue_conflict_is_rejected_before_process(self):
+        self.runner.resources = lambda: {41220}
+        with self.assertRaisesRegex(RuntimeError, "conflicts"):
+            self.runner.start("general.bat")
+        self.popen.assert_not_called()
+        self.command.assert_not_called()
+
+    def test_unreadable_resource_state_is_not_bypassed(self):
+        self.runner.resources = mock.Mock(side_effect=ValueError("unknown rules"))
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            self.runner.start("general.bat")
+        self.popen.assert_not_called()
 
     def test_interface_injection_is_refused_before_process_or_firewall(self):
         self.runner.prepared["values"]["interface"] = 'eth0"; flush ruleset; #'

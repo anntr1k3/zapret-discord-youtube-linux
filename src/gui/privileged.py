@@ -19,6 +19,8 @@ import uuid
 SERVICE = "zapret_discord_youtube.service"
 RELEASES = Path("/opt/zapret-discord-youtube/releases")
 HOSTS = Path("/etc/hosts")
+STREAM_ACTION = "test-session"
+# strategy-tester-v1: installed-only streaming transport and unprivileged GUI runner supported.
 # read-only-service-status-v1: safe for unprivileged capability detection.
 # tcp-timestamps-enable-v1: fixed-key runtime-only action, independent of config.
 ACTIONS = {"read-config": set(), "read-status": set(), "select-profile": {"strategy", "expected_sha256"},
@@ -640,15 +642,50 @@ def make_installer(release):
     return installer
 
 
+def load_test_session_modules(release):
+    modules = []
+    for name in ("strategy_test_session", "strategy_test_service"):
+        path = release / "src/lib" / (name + ".py")
+        module = types.ModuleType("installed_stream_" + name)
+        module.__file__ = str(path)
+        exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
+        modules.append(module)
+    return tuple(modules)
+
+
+def run_test_session(release, *, read_fd=0, write_fd=1):
+    """Only called after root/release verification; never use the EOF JSON path."""
+    protocol, service = load_test_session_modules(release)
+    with protocol.SessionSignals() as signals:
+        channel = protocol.MessageChannel(read_fd, write_fd)
+        try:
+            request = channel.receive(30)
+            protocol.validate_begin(request)
+            runtime = service.InstalledSessionRuntime(make_installer(release))
+            result = protocol.serve(runtime, request, channel.receive, channel.send, signals=signals)
+            return 0 if result["ok"] else 1
+        except Exception as error:
+            # No change precedes begin validation. Exceptions from serve have
+            # already passed through its recovery path while the lock was held.
+            signals.recovering = True
+            try:
+                channel.send({"event": "closed", "ok": False, "error": str(error)})
+            except (OSError, TimeoutError):
+                pass
+            return 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=tuple(ACTIONS))
+    parser.add_argument("action", choices=(*ACTIONS, STREAM_ACTION))
     args = parser.parse_args()
     try:
         if os.geteuid() != 0:
             raise ValueError("Требуется авторизация администратора")
         os.environ["PATH"] = "/usr/sbin:/usr/bin:/sbin:/bin"
         release = verify_release()
+        if args.action == STREAM_ACTION:
+            return run_test_session(release)
         data = sys.stdin.buffer.read(16385)
         if len(data) > 16384:
             raise ValueError("Запрос слишком велик")

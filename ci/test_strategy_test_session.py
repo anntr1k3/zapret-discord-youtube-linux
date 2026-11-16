@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import json
 import os
+import signal
 from pathlib import Path
 import unittest
 
@@ -147,6 +148,70 @@ class SessionProtocolTests(unittest.TestCase):
         self.assertIn("nfqws failed", result["error"])
         self.assertIn("stop", self.calls)
         self.assertEqual(len(self.restores()), 1)
+
+    def test_sigterm_while_waiting_restores_instead_of_terminating(self):
+        with self.module.SessionSignals() as signals:
+            def interrupted(timeout):
+                signals.handle(signal.SIGTERM, None)
+            result = self.run_session(receive=interrupted, signals=signals)
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["restored"])
+        self.assertEqual(result["signal"], signal.SIGTERM)
+
+    def test_signal_during_start_is_deferred_until_ownership_is_recorded(self):
+        with self.module.SessionSignals() as signals:
+            def start(name):
+                self.calls.append("partial start")
+                signals.handle(signal.SIGTERM, None)
+                self.calls.append("start bookkeeping complete")
+            self.runtime.start = start
+            self.commands = [{"command": "start", "strategy": "general.bat"}]
+            result = self.run_session(signals=signals)
+        self.assertTrue(result["restored"])
+        self.assertLess(self.calls.index("start bookkeeping complete"), self.calls.index("stop"))
+
+    def test_repeated_signals_cannot_interrupt_cleanup(self):
+        with self.module.SessionSignals() as signals:
+            self.runtime.start = lambda name: signals.handle(signal.SIGINT, None)
+            def stop():
+                signals.handle(signal.SIGTERM, None)
+                self.calls.append("stop complete")
+            self.runtime.stop = stop
+            self.commands = [{"command": "start", "strategy": "general.bat"}]
+            result = self.run_session(signals=signals)
+        self.assertIn("stop complete", self.calls)
+        self.assertEqual(len(self.restores()), 1)
+        self.assertTrue(result["restored"])
+        self.assertEqual(result["signal"], signal.SIGINT)
+
+    def test_first_signal_during_restore_does_not_cut_restore_short(self):
+        original = self.runtime.restore
+        with self.module.SessionSignals() as signals:
+            def restore(snapshot):
+                signals.handle(signal.SIGTERM, None)
+                original(snapshot)
+            self.runtime.restore = restore
+            result = self.run_session(signals=signals)
+        self.assertEqual(len(self.restores()), 1)
+        self.assertTrue(result["restored"])
+        self.assertFalse(result["ok"])
+
+    def test_signal_does_not_hide_original_start_error(self):
+        with self.module.SessionSignals() as signals:
+            def broken(name):
+                signals.handle(signal.SIGTERM, None)
+                raise RuntimeError("original engine failure")
+            self.runtime.start = broken
+            self.commands = [{"command": "start", "strategy": "general.bat"}]
+            result = self.run_session(signals=signals)
+        self.assertIn("original engine failure", result["error"])
+        self.assertTrue(result["restored"])
+
+    def test_original_signal_handlers_are_restored(self):
+        before = {value: signal.getsignal(value) for value in (signal.SIGINT, signal.SIGTERM)}
+        with self.module.SessionSignals():
+            pass
+        self.assertEqual(before, {value: signal.getsignal(value) for value in before})
 
     def test_restore_failure_is_not_success(self):
         def broken(snapshot):

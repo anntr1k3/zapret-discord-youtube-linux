@@ -657,10 +657,42 @@ class ExportTests(unittest.TestCase):
 
 
 class BackendTests(unittest.TestCase):
-    def test_strategies_fail_closed_even_with_new_helper_marker(self):
+    def test_strategies_require_capability(self):
         backend = self.real_backend()
-        with mock.patch.object(backend, "tester_supported", return_value=True):
-            with self.assertRaisesRegex(RuntimeError, "runner"):
+        with mock.patch.object(backend, "tester_supported", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "Нужен установленный доверенный помощник"):
+                backend.tester_run("standard", ["general.bat"], execute=mock.Mock(return_value=(0, "200", "")),
+                                   curl_path="curl", ping_path="ping")
+
+    def test_strategies_connect_streaming_runner_when_supported(self):
+        backend = self.real_backend()
+        fake_runner = mock.Mock()
+        fake_runner.snapshot.return_value = {}
+        fake_runner.start.return_value = None
+        fake_runner.stop.return_value = None
+        fake_runner.restore.return_value = None
+
+        with mock.patch.object(backend, "tester_supported", return_value=True), \
+                mock.patch.object(backend, "trusted_helper", return_value=Path("/opt/zapret/privileged.py")), \
+                mock.patch.object(backend, "load_config", return_value={"sha256": "b" * 64}), \
+                mock.patch.object(self.gui, "load_strategy_test_client_module") as mock_client:
+            mock_client.return_value.StreamingTesterRunner.return_value = fake_runner
+            report = backend.tester_run(
+                "standard", ["general.bat"],
+                targets=[{"name": "Web", "url": "https://example.org", "ping": "example.org"}],
+                execute=mock.Mock(return_value=(0, "HTTP/1.1 200 OK\r\n\r\n", "")),
+                curl_path="curl", ping_path="ping")
+            self.assertEqual(report["mode"], "strategies")
+            fake_runner.snapshot.assert_called_once()
+            fake_runner.start.assert_called_once_with("general.bat")
+            fake_runner.stop.assert_called_once()
+            fake_runner.restore.assert_called_once()
+
+    def test_strategies_fail_if_config_sha256_missing(self):
+        backend = self.real_backend()
+        with mock.patch.object(backend, "tester_supported", return_value=True), \
+                mock.patch.object(backend, "load_config", return_value={"sha256": None}):
+            with self.assertRaisesRegex(RuntimeError, "ревизию конфигурации"):
                 backend.tester_run("standard", ["general.bat"], execute=mock.Mock(return_value=(0, "200", "")),
                                    curl_path="curl", ping_path="ping")
 

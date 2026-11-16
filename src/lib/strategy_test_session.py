@@ -1,17 +1,19 @@
-"""Bounded protocol controller for a future installed-only tester helper.
+"""Bounded protocol controller for the installed-only streaming tester helper.
 
 This module performs no service, firewall, subprocess or filesystem operations.
 The injected runtime must validate/snapshot without side effects, hold the
 installer lock for the entire session, and implement bounded start/stop/restore.
-It is deliberately not exposed as a privileged action until that runtime and
-the disconnect-safe transport have integration coverage.
+The GUI capability remains gated separately until the client integration is
+verified. Signal handling is installed only for the helper's main-thread run.
 """
 
 import json
 import os
 import re
 import select
+import signal
 import time
+from contextlib import contextmanager, nullcontext
 
 
 MAX_MESSAGE = 16384
@@ -20,6 +22,64 @@ MAX_COMMANDS = 2 * MAX_STRATEGIES + 1
 IDLE_TIMEOUT = 300.0
 SESSION_TIMEOUT = 3600.0
 NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.bat")
+
+
+class SessionInterrupted(RuntimeError):
+    pass
+
+
+class SessionSignals:
+    """Main-thread SIGTERM/SIGINT policy for one helper process.
+
+    Defer Python exceptions through mutation/bookkeeping windows rather than
+    blocking OS signals: children must not inherit a blocked SIGTERM mask.
+    Once recovery starts, further signals are recorded but never interrupt it.
+    SIGKILL and power loss cannot be recovered by this mechanism.
+    """
+
+    def __init__(self):
+        self.pending = None
+        self.depth = 0
+        self.recovering = False
+        self.previous = {}
+
+    @property
+    def message(self):
+        return "Session interrupted by " + signal.Signals(self.pending).name if self.pending else None
+
+    def handle(self, number, frame):
+        if self.pending is None:
+            self.pending = number
+        if not self.depth and not self.recovering:
+            raise SessionInterrupted(self.message)
+
+    def __enter__(self):
+        try:
+            for number in (signal.SIGTERM, signal.SIGINT):
+                self.previous[number] = signal.getsignal(number)
+                signal.signal(number, self.handle)
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return self
+
+    def __exit__(self, *_):
+        for number, handler in self.previous.items():
+            signal.signal(number, handler)
+
+    @contextmanager
+    def critical(self):
+        self.depth += 1
+        failed = False
+        try:
+            yield
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            self.depth -= 1
+            if not failed and not self.depth and self.pending and not self.recovering:
+                raise SessionInterrupted(self.message)
 
 
 def decode_message(data):
@@ -126,7 +186,7 @@ class MessageChannel:
             encoded = encoded[written:]
 
 
-def serve(runtime, request, receive, send, *, clock=time.monotonic):
+def serve(runtime, request, receive, send, *, clock=time.monotonic, signals=None):
     """Process one authorized selection, restore on EOF/error, never accept argv.
 
     receive(timeout) returns one decoded command or None on clean EOF, and must
@@ -144,12 +204,15 @@ def serve(runtime, request, receive, send, *, clock=time.monotonic):
     snapshot = None
     have_snapshot = False
     active = False
+    def critical():
+        return signals.critical() if signals is not None else nullcontext()
     with runtime.operation():
         try:
             snapshot = runtime.snapshot(request)
             have_snapshot = True
             # Even a partially failed enter must run restore under the same lock.
-            runtime.enter(snapshot)
+            with critical():
+                runtime.enter(snapshot)
             send({"event": "ready", "ok": True})
             for _ in range(MAX_COMMANDS):
                 remaining = deadline - clock()
@@ -170,11 +233,13 @@ def serve(runtime, request, receive, send, *, clock=time.monotonic):
                         raise ValueError("Stop the current test strategy before starting another")
                     # Mark before calling: failed start can leave partial rules.
                     active = True
-                    runtime.start(command["strategy"])
+                    with critical():
+                        runtime.start(command["strategy"])
                     send({"event": "started", "ok": True, "strategy": command["strategy"]})
                 else:
                     if active:
-                        runtime.stop()
+                        with critical():
+                            runtime.stop()
                         active = False
                     send({"event": "stopped", "ok": True})
             else:
@@ -185,17 +250,25 @@ def serve(runtime, request, receive, send, *, clock=time.monotonic):
             if not isinstance(error, Exception):
                 raise
         finally:
+            if signals is not None:
+                signals.recovering = True
             if have_snapshot:
                 if active:
                     try:
-                        runtime.stop()
+                        with critical():
+                            runtime.stop()
                     except Exception as error:
                         result["cleanup_error"] = str(error)
                 try:
-                    runtime.restore(snapshot)
+                    with critical():
+                        runtime.restore(snapshot)
                     result["restored"] = True
                 except Exception as error:
                     result["restore_error"] = str(error)
+            if signals is not None and signals.pending:
+                result["signal"] = signals.pending
+                result["reason"] = "signal"
+                result["error"] = result["error"] or signals.message
             result["ok"] = have_snapshot and not any(result[field] for field in
                                                      ("error", "cleanup_error", "restore_error"))
             try:
