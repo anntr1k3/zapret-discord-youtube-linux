@@ -149,6 +149,48 @@ class ReportTests(unittest.TestCase):
         self.assertIn("не доказывает", item["summary"])
         self.assertNotIn("unrelated", " ".join(item["details"]))
 
+    def test_managed_nfqws_is_not_reported_as_foreign_conflict(self):
+        (self.proc / "100/comm").unlink()  # remove openvpn
+        self.write("proc/102/comm", "nfqws\n")
+        self.write("proc/102/cgroup", "0::/system.slice/zapret_discord_youtube.service\n")
+        item = self.check(self.report(), "possible-conflicts")
+        self.assertEqual(item["state"], "observed")
+        self.assertIn("управляемый сервис", " ".join(item["details"]))
+
+    def test_foreign_nfqws_is_reported_as_warning(self):
+        (self.proc / "100/comm").unlink()  # remove openvpn
+        self.write("proc/103/comm", "nfqws\n")
+        self.write("proc/103/cgroup", "0::/user.slice/user-1000.slice/app.scope\n")
+        item = self.check(self.report(), "possible-conflicts")
+        self.assertEqual(item["state"], "warning")
+        self.assertIn("nfqws, PID 103", " ".join(item["details"]))
+
+    def test_network_tunnels_detection(self):
+        self.write("proc/net/dev", "Inter-|   Receive\n face |bytes\n  lo: 100 0\n  enp2s0: 200 0\n  Meta: 300 0\n")
+        item = self.check(self.report(), "network-tunnels")
+        self.assertEqual(item["state"], "warning")
+        self.assertIn("Meta", " ".join(item["details"]))
+
+    def test_network_tunnels_clean(self):
+        self.write("proc/net/dev", "Inter-|   Receive\n face |bytes\n  lo: 100 0\n  eth0: 200 0\n")
+        item = self.check(self.report(), "network-tunnels")
+        self.assertEqual(item["state"], "observed")
+
+    def test_listening_proxy_ports_detection(self):
+        # 7890 in hex is 1ED2, state 0A is TCP_LISTEN
+        self.write("proc/net/tcp", "  sl  local_address rem_address   st\n   0: 0100007F:1ED2 00000000:0000 0A\n")
+        item = self.check(self.report(), "listening-ports")
+        self.assertEqual(item["state"], "warning")
+        self.assertIn("7890", " ".join(item["details"]))
+        self.assertIn("Clash", " ".join(item["details"]))
+
+    def test_listening_dns_only_is_observed(self):
+        # 53 in hex is 0035
+        self.write("proc/net/tcp", "  sl  local_address rem_address   st\n   0: 0100007F:0035 00000000:0000 0A\n")
+        item = self.check(self.report(), "listening-ports")
+        self.assertEqual(item["state"], "observed")
+        self.assertIn("53", " ".join(item["details"]))
+
     def test_nfqueue_listener_is_not_interpreted_as_pid_ownership(self):
         item = self.check(self.report(), "nfqueue")
         self.assertIn("220", " ".join(item["details"]))
