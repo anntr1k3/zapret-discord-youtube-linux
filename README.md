@@ -27,15 +27,31 @@ Ubuntu 24.04 • Debian 12 • Arch Linux • Fedora • Gentoo Linux
 
 ## Быстрый старт
 
+### Вариант 1. Установка в 1 клик (рекомендуется):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/anntr1k3/zapret-discord-youtube-linux/master/install.sh | bash
+```
+
+Или установка готового `.deb`-пакета для Ubuntu / Debian:
+
+```bash
+sudo apt install ./dist/zapret-discord-youtube_1.0.0_amd64.deb
+```
+
+### Вариант 2. Ручная установка через Git:
+
 ```bash
 git clone https://github.com/anntr1k3/zapret-discord-youtube-linux.git
 cd zapret-discord-youtube-linux
 
-./service.sh download-deps --default
-./service.sh
+./install.sh
 ```
 
-Скрипт интерактивно предложит выбрать действие: запуск, управление сервисом или настройку конфигурации.
+После установки запускайте:
+- `zapret-gui` — нативный графический интерфейс GTK4 / libadwaita;
+- `zapret` — интерактивное консольное меню управления;
+- Или выберите **Zapret** в меню приложений вашей системы (доступно контекстное меню быстрого запуска/остановки по правому клику).
 
 > 🚀 **Релиз 1.0 (Полный паритет с Flowseal service.bat v1.10.4):**
 > Добавлен полноценный нативный графический интерфейс на **GTK4 / libadwaita** с нулевой потребностью в терминале, безопасным разделением привилегий (pkexec root-помощник), встроенным тестировщиком стратегий, глубокой диагностикой конфликтов и ярлыком рабочего стола. Подробнее: [Release Notes v1.0](RELEASE_NOTES_v1.0.md) и [документация GUI](docs/gui.md).

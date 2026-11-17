@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1. System-wide installed location
+if [ -f "/opt/zapret-discord-youtube/current/gui.py" ]; then
+    exec /usr/bin/python3 /opt/zapret-discord-youtube/current/gui.py "$@"
+fi
+
+# 2. Relative to script directory (when installed alongside repo)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -f "$SCRIPT_DIR/gui.py" ]; then
+    exec /usr/bin/python3 "$SCRIPT_DIR/gui.py" "$@"
+fi
+
+# 3. Known user repository path
+if [ -f "$HOME/Документы/zapret-discord-youtube-linux/gui.py" ]; then
+    exec /usr/bin/python3 "$HOME/Документы/zapret-discord-youtube-linux/gui.py" "$@"
+fi
+
+echo "Ошибка: не удалось найти установленный zapret или репозиторий с gui.py" >&2
+exit 1

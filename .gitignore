@@ -32,6 +32,7 @@ venv/
 # Logs & temp diagnostics
 *.log
 *.tmp
+dist/
 zapret-diagnostics*.json
 zapret-tester-report*.txt
 ci_results/

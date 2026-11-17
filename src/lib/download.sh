@@ -83,7 +83,7 @@ download_zapret_release() {
     local url="https://github.com/${ZAPRET_REPO}/releases/download/${tag}/${archive}"
     local tmp="/tmp/${archive}"
     
-    elevate rm -rf "$tmp"
+    rm -rf "$tmp"
 
     log "Скачивание zapret: $url" >&2
     curl -fL "$url" -o "$tmp" || handle_error "Ошибка при скачивании zapret"

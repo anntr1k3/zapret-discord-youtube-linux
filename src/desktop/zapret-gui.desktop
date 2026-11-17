@@ -4,10 +4,35 @@ Name=Zapret
 GenericName=DPI Circumvention GUI
 GenericName[ru]=Обход блокировок и управление сервисом
 Comment=Управление сервисом zapret и стратегиями Flowseal
-Exec=/usr/bin/python3 /opt/zapret-discord-youtube/current/src/gui/launch.py
+Exec=zapret-gui
 Icon=zapret-gui
 Terminal=false
 Categories=Network;GTK;
 StartupNotify=true
 Keywords=zapret;discord;youtube;dpi;bypass;vpn;proxy;
 Keywords[ru]=запрет;дискорд;ютуб;обход;блокировки;
+Actions=StartService;StopService;RestartService;RunTester;
+
+[Desktop Action StartService]
+Name=Запустить сервис
+Name[en]=Start Service
+Exec=zapret service start
+Icon=media-playback-start
+
+[Desktop Action StopService]
+Name=Остановить сервис
+Name[en]=Stop Service
+Exec=zapret service stop
+Icon=media-playback-stop
+
+[Desktop Action RestartService]
+Name=Перезапустить сервис
+Name[en]=Restart Service
+Exec=zapret service restart
+Icon=view-refresh
+
+[Desktop Action RunTester]
+Name=Тестировщик стратегий
+Name[en]=Test Strategies
+Exec=zapret-gui --demo
+Icon=network-transmit-receive
