@@ -202,9 +202,21 @@ run_daemon() {
 
 # Остановка zapret (nfqws + firewall rules)
 stop_zapret() {
+    local lockdir="/tmp/.zapret-stop-${EUID:-0}.lock"
+    if ! mkdir "$lockdir" 2>/dev/null; then
+        local i=0
+        while [[ -d "$lockdir" && $i -lt 30 ]]; do
+            sleep 0.1
+            ((i++))
+        done
+        return 0
+    fi
+    trap 'rm -rf "$lockdir" 2>/dev/null || true' EXIT RETURN
+
     log "Остановка nfqws..."
     stop_nfqws
     log "Очистка правил файрвола..."
     firewall_clear
     log "Очистка завершена."
+    rm -rf "$lockdir" 2>/dev/null || true
 }

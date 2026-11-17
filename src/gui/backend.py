@@ -218,9 +218,15 @@ class Backend:
         except (OSError, RuntimeError):
             return False
 
+    def _resolve_targets_path(self):
+        target_path = self.base() / "zapret-latest/utils/targets.txt"
+        if not target_path.is_file() and (self.workspace / "zapret-latest/utils/targets.txt").is_file():
+            target_path = self.workspace / "zapret-latest/utils/targets.txt"
+        return target_path
+
     def tester_preview(self):
         module = load_strategy_tester_module()
-        targets, problems = module.load_targets(self.base() / "zapret-latest/utils/targets.txt")
+        targets, problems = module.load_targets(self._resolve_targets_path())
         return {"strategies": module.discover_strategies(self.base()),
                 "targets": targets, "problems": problems}
 
@@ -251,7 +257,7 @@ class Backend:
             runner = client_module.StreamingTesterRunner(
                 self.trusted_helper(), strategies, expected_sha256)
         if targets is None:
-            targets, target_problems = module.load_targets(self.base() / "zapret-latest/utils/targets.txt")
+            targets, target_problems = module.load_targets(self._resolve_targets_path())
         else:
             target_problems = []
         if not targets:

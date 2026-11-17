@@ -15,8 +15,13 @@ backend_setup() {
     local reply_chain="${6:-$IPT_CHAIN_REPLY}"
 
     local oif_clause=""
+    local iif_clause=""
     if [[ -n "$interface" && "$interface" != "any" ]]; then
         oif_clause="-o $interface"
+        iif_clause="-i $interface"
+    else
+        oif_clause="! -o lo"
+        iif_clause="! -i lo"
     fi
 
     local ipt_tcp="${tcp_ports//\{/}"
@@ -62,7 +67,7 @@ backend_setup() {
             elevate "$cmd" -t "$IPT_TABLE" -N "$reply_chain"
             elevate "$cmd" -t "$IPT_TABLE" -A PREROUTING -j "$reply_chain"
 
-            elevate "$cmd" -t "$IPT_TABLE" -A "$reply_chain" $oif_clause \
+            elevate "$cmd" -t "$IPT_TABLE" -A "$reply_chain" $iif_clause \
                 -p tcp -m multiport --sports "$ipt_sports" \
                 -m connbytes --connbytes-dir=reply --connbytes-mode=packets --connbytes 1:3 \
                 -m mark ! --mark "$mark" \

@@ -21,6 +21,9 @@ backend_setup() {
     if [[ -n "$interface" && "$interface" != "any" ]]; then
         oif_clause="oifname \"$interface\""
         iif_clause="iifname \"$interface\""
+    else
+        oif_clause="oifname != \"lo\""
+        iif_clause="iifname != \"lo\""
     fi
 
     if elevate nft list tables 2>/dev/null | grep -q "$table"; then
@@ -63,14 +66,13 @@ backend_clear() {
     local chain_pre="${3:-$NFT_CHAIN_PRE}"
 
     if elevate nft list tables 2>/dev/null | grep -q "$table"; then
-        if elevate nft list chain "$table" "$chain" >/dev/null 2>&1; then
-            elevate nft flush chain "$table" "$chain" 2>/dev/null
-            elevate nft delete chain "$table" "$chain" 2>/dev/null
+        elevate nft delete table "$table" 2>/dev/null || true
+        if elevate nft list tables 2>/dev/null | grep -q "$table"; then
+            elevate nft flush chain "$table" "$chain" 2>/dev/null || true
+            elevate nft delete chain "$table" "$chain" 2>/dev/null || true
+            elevate nft flush chain "$table" "$chain_pre" 2>/dev/null || true
+            elevate nft delete chain "$table" "$chain_pre" 2>/dev/null || true
+            elevate nft delete table "$table" 2>/dev/null || true
         fi
-        if elevate nft list chain "$table" "$chain_pre" >/dev/null 2>&1; then
-            elevate nft flush chain "$table" "$chain_pre" 2>/dev/null
-            elevate nft delete chain "$table" "$chain_pre" 2>/dev/null
-        fi
-        elevate nft delete table "$table" 2>/dev/null
     fi
 }

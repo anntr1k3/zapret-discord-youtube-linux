@@ -88,7 +88,7 @@ def valid_payload_name(name):
         return bool(re.fullmatch(r"(?:general|discord)[A-Za-z0-9А-Яа-яЁё_. ()-]*\.bat", name, re.I))
     folder, separator, filename = name.partition("/")
     extension = "bin" if folder == "bin" else "txt"
-    return (separator and folder in ("bin", "lists") and filename not in USER_LISTS
+    return (separator and folder in ("bin", "lists", "utils") and filename not in USER_LISTS
             and bool(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\." + extension, filename)))
 
 
@@ -98,7 +98,7 @@ def check_payload(files):
     for name, data in files.items():
         if not valid_payload_name(name) or len(data) > MAX_FILE:
             raise ValueError(f"Unsupported or oversized data file: {name}")
-        if name.startswith("lists/"):
+        if name.startswith(("lists/", "utils/")):
             text = data.decode("utf-8-sig")
             if any(ord(c) < 32 and c not in "\r\n\t" for c in text):
                 raise ValueError(f"List is not plain text: {name}")
