@@ -11,8 +11,8 @@
 На базе стратегий [Flowseal](https://github.com/Flowseal/zapret-discord-youtube) и утилиты [zapret](https://github.com/bol-van/zapret) от bol-van  
 Соавтор первоначальной адаптации: [Sergeydigl3](https://github.com/Sergeydigl3/zapret-discord-youtube-linux)
 
-**Проверено на:**
-Ubuntu 24.04 • Debian 12 • Arch Linux • Fedora • Gentoo Linux
+**Проверка текущего `.deb`:** Ubuntu 24.04 LTS, amd64. Другие дистрибутивы и
+архитектуры не проверены для этой поставки.
 
 </div>
 
@@ -27,19 +27,23 @@ Ubuntu 24.04 • Debian 12 • Arch Linux • Fedora • Gentoo Linux
 
 ## Быстрый старт
 
-### Вариант 1. Установка в 1 клик (рекомендуется):
+### Управляемый сервис и GTK-интерфейс
+
+Текущая ветка собирает **неопубликованный кандидат** для Ubuntu 24.04+/amd64
+из проверенных архивов двигателя и стратегий:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/anntr1k3/zapret-discord-youtube-linux/master/install.sh | bash
+./scripts/build-deb.sh
+sudo apt install ./dist/zapret-discord-youtube_1.0.1~rc1_amd64.deb
+zapret-gui
 ```
 
-Или установка готового `.deb`-пакета для Ubuntu / Debian:
+Пакет устанавливает приложение, но не включает сервис. В GUI откройте вкладку
+«Сервис», чтобы установить сервис отдельно. Опубликованный ранее `.deb` **v1.0.0**
+не содержит нужного bootstrap — не используйте его для новой установки из GUI.
+[Устройство пакета, оговорки и проверки](docs/trusted-bootstrap.md).
 
-```bash
-sudo apt install ./dist/zapret-discord-youtube_1.0.0_amd64.deb
-```
-
-### Вариант 2. Ручная установка через Git:
+### Пользовательская копия из Git
 
 ```bash
 git clone https://github.com/anntr1k3/zapret-discord-youtube-linux.git
@@ -48,13 +52,15 @@ cd zapret-discord-youtube-linux
 ./install.sh
 ```
 
-После установки запускайте:
+`install.sh` подготавливает checkout и ярлыки пользователя, но не устанавливает
+доверенный bootstrap. После установки запускайте:
 - `zapret-gui` — нативный графический интерфейс GTK4 / libadwaita;
 - `zapret` — интерактивное консольное меню управления;
 - Или выберите **Zapret** в меню приложений вашей системы (доступно контекстное меню быстрого запуска/остановки по правому клику).
 
-> 🚀 **Релиз 1.0 (Полный паритет с Flowseal service.bat v1.10.4):**
-> Добавлен полноценный нативный графический интерфейс на **GTK4 / libadwaita** с нулевой потребностью в терминале, безопасным разделением привилегий (pkexec root-помощник), встроенным тестировщиком стратегий, глубокой диагностикой конфликтов и ярлыком рабочего стола. Подробнее: [Release Notes v1.0](RELEASE_NOTES_v1.0.md) и [документация GUI](docs/gui.md).
+> В GUI есть управление сервисом, тестировщик, диагностика и обслуживание.
+> Покрытие Flowseal 1.10.4 отслеживается [по функциям](docs/gui-parity-1.0.md);
+> полное соответствие и эффективность обхода не подтверждены.
 
 > ⚠️ **Безопасность:** создание широких правил NOPASSWD отключено. Привилегированные операции требуют обычного подтверждения sudo/doas/polkit. Подробнее: [изменения безопасности](docs/security-hardening.md).
 
@@ -66,6 +72,7 @@ cd zapret-discord-youtube-linux
 
 [Графический интерфейс GTK4](docs/gui.md):
 - `python3 gui.py --demo` — безопасный демо-режим без прав root и без изменения системы;
+- `zapret-gui --tester` — открыть настоящий тестировщик, не запуская тесты;
 - `python3 gui.py` — полноценное управление обходом DPI;
 - `./src/desktop/install-desktop.sh --user` — установка ярлыка и иконки приложения в меню GNOME/KDE.
 
@@ -75,7 +82,8 @@ cd zapret-discord-youtube-linux
 
 **Требования:**
 - Бэкенды firewall: **nftables** (приоритет при автоопределении) или **iptables + ip6tables**
-- Поддерживаемые архитектуры: **x86_64, ARM, MIPS, и др** (автоматическое определение)
+- Сборка `.deb` сейчас только для **amd64**; загрузчик legacy CLI распознаёт
+  несколько других архитектур, но их работоспособность отдельно не проверена.
 
 ---
 
@@ -83,14 +91,15 @@ cd zapret-discord-youtube-linux
 
 Адаптер по умолчанию использует:
 - **nfqws**: v72.9 (рекомендованная версия, прописана в `src/lib/constants.sh` как `ZAPRET_RECOMMENDED_VERSION`)
-- **Стратегии**: [коммит ef19845a801e4e743f7bdfdbd58f9745c6adbd60](https://github.com/Flowseal/zapret-discord-youtube/commit/ef19845a801e4e743f7bdfdbd58f9745c6adbd60) (прописан в `src/lib/constants.sh` как `MAIN_REPO_REV`)
+- **Стратегии**: [Flowseal 1.10.4, коммит 176f56d](https://github.com/Flowseal/zapret-discord-youtube/commit/176f56dc3f11ce5915c26abcdde903f93d835b64).
 
 Вы можете изменить версии:
 - Интерактивно: `./service.sh download-deps` (выбор из доступных версий)
 - Напрямую: `./service.sh download-deps -z v72.9 -s main`
 - В коде: отредактируйте константы в `src/lib/constants.sh`
 
-Если текущая версия не работает, попробуйте [стабильные релизы](https://github.com/anntr1k3/zapret-discord-youtube-linux/releases).
+Предыдущие артефакты доступны в [архиве релизов](https://github.com/anntr1k3/zapret-discord-youtube-linux/releases).
+Их ограничения отличаются; не заменяйте рабочую установку без резервной копии.
 
 **Сторонние проекты:**
 - [Версия от Snowy-Fluffy](https://github.com/Snowy-Fluffy/zapret.installer)

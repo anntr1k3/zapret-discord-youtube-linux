@@ -82,6 +82,114 @@ class InstallerTests(unittest.TestCase):
     def install(self, **kwargs):
         self.installer.install(self.source, **kwargs)
 
+    def test_initial_strategy_is_generated_privately_without_source_config(self):
+        config = self.source / "conf.env"
+        config.unlink()
+        self.installer.deploy(self.source, initial_strategy="general.bat")
+        self.assertFalse(config.exists())
+        self.assertIn(b"strategy=general.bat\n", (self.installer.data / "conf.env").read_bytes())
+
+    def test_initial_strategy_preserves_saved_config_on_reinstall(self):
+        self.install()
+        config = self.installer.data / "conf.env"
+        saved = config.read_bytes()
+        self.installer.remove()
+        (self.source / "conf.env").unlink()
+        self.installer.deploy(self.source, initial_strategy="missing.bat")
+        self.assertEqual(config.read_bytes(), saved)
+
+    def test_failed_initial_activation_removes_only_new_config(self):
+        self.systemd.fail_start = True
+        with self.assertRaisesRegex(RuntimeError, "start failure"):
+            self.installer.deploy(self.source, start=True, initial_strategy="general.bat")
+        self.assertFalse((self.installer.data / "conf.env").exists())
+        self.assertIsNone(self.installer.state())
+        self.assertTrue((self.source / "conf.env").exists())
+
+    def test_purge_keeps_lock_inode_and_permanent_application(self):
+        import fcntl
+        application = self.root / "usr/lib/zapret-discord-youtube"
+        application.mkdir(parents=True)
+        (application / "gui.py").write_text("# permanent application\n")
+        self.install()
+        lock = self.installer.state_dir / ".install.lock"
+        inode = lock.stat().st_ino
+        original_rmtree = shutil.rmtree
+
+        def assert_locked(path, *args, **kwargs):
+            with lock.open("a") as other:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return original_rmtree(path, *args, **kwargs)
+
+        with mock.patch.object(self.module.shutil, "rmtree", side_effect=assert_locked):
+            self.installer.remove(purge=True)
+        self.assertEqual(lock.stat().st_ino, inode)
+        self.assertFalse(self.installer.data.exists())
+        self.assertFalse((self.installer.state_dir / "backups").exists())
+        self.assertTrue((application / "gui.py").is_file())
+        self.install()
+        self.assertEqual(lock.stat().st_ino, inode)
+
+    def bootstrap(self):
+        spec = importlib.util.spec_from_file_location("test_bootstrap", REPO / "src/gui/bootstrap.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_bootstrap_rejects_checkout_before_loading_installer(self):
+        bootstrap = self.bootstrap()
+        with self.assertRaisesRegex(ValueError, "постоянного пакета"):
+            bootstrap.verify_application()
+
+    def test_bootstrap_protocol_rejects_paths_code_and_non_boolean_flags(self):
+        bootstrap = self.bootstrap()
+        for action, payload in (
+            ("install-service", {"source": str(self.source), "strategy": None, "start": True}),
+            ("install-service", {"strategy": "../evil.bat", "start": True}),
+            ("install-service", {"strategy": "general.bat", "start": 1}),
+            ("install-service", {"strategy": str(self.source / "nfqws"), "start": True}),
+            ("remove-service", {"purge": "true"}),
+            ("remove-service", {"purge": False, "root": str(self.root)}),
+            ("update", {}),
+        ):
+            with self.subTest(action=action, payload=payload), \
+                    self.assertRaises(ValueError):
+                bootstrap.dispatch(self.installer, self.source, action, payload)
+        self.assertEqual(self.systemd.calls, [])
+        self.assertFalse(self.installer.state_dir.exists())
+
+    def test_bootstrap_install_remove_reinstall_keeps_application_and_data(self):
+        bootstrap = self.bootstrap()
+        application = self.root / "usr/lib/zapret-discord-youtube"
+        application.mkdir(parents=True)
+        shutil.copytree(self.source, application / "runtime")
+        (application / "gui.py").write_text("# permanent GUI\n")
+        (application / "runtime/conf.env").unlink()
+        for cycle in range(2):
+            result = bootstrap.dispatch(self.installer, application, "install-service",
+                                        {"strategy": "general.bat", "start": True})
+            self.assertEqual(result, {"installed": True, "started": True})
+            self.assertTrue(self.systemd.active)
+            saved = (self.installer.data / "conf.env").read_bytes()
+            result = bootstrap.dispatch(self.installer, application, "remove-service", {"purge": False})
+            self.assertEqual(result, {"removed": True, "purged": False})
+            self.assertFalse(self.systemd.active)
+            self.assertEqual((self.installer.data / "conf.env").read_bytes(), saved)
+            self.assertTrue((application / "gui.py").exists())
+            self.assertFalse((application / "runtime/conf.env").exists())
+            self.assertFalse(self.installer.current.exists())
+
+    def test_bootstrap_does_not_accept_runtime_symlinks(self):
+        bootstrap = self.bootstrap()
+        application = self.root / "usr/lib/zapret-discord-youtube"
+        application.mkdir(parents=True)
+        (application / "runtime").symlink_to(self.source, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            bootstrap.dispatch(self.installer, application, "install-service",
+                               {"strategy": "general.bat", "start": True})
+        self.assertEqual(self.systemd.calls, [])
+
     def test_install_separates_config_and_normalizes_permissions(self):
         (self.source / "service.sh").chmod(0o777)
         self.install()

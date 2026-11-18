@@ -5,6 +5,8 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import types
 import unittest
 from unittest import mock
@@ -167,6 +169,105 @@ class StrategyTestClientTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "nfqws dry-run rejected"):
             runner.start("general.bat")
         self.assertIsNone(runner.current_strategy)
+
+    def test_snapshot_timeout_closes_pipes_without_waiting_for_live_stderr(self):
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(proc.__exit__, None, None, None)
+        runner = self.make_runner(proc)
+        runner.channel_cls = mock.Mock()
+        runner.channel_cls.return_value.receive.side_effect = TimeoutError("readiness deadline")
+        try:
+            # Fail deterministically if the runner tries a blocking stream read.
+            with mock.patch.object(proc.stderr, "read", side_effect=AssertionError("blocking stderr read")):
+                with self.assertRaisesRegex(RuntimeError, "readiness deadline"):
+                    runner.snapshot()
+            self.assertTrue(proc.stdin.closed and proc.stdout.closed and proc.stderr.closed)
+            self.assertEqual(proc.wait(timeout=1), 0)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=2)
+
+    def test_start_timeout_rejects_next_command_and_reads_restore_after_late_ack(self):
+        proc = FakeStreamProcess(stdin_fd=self.c2h_w, stdout_fd=self.h2c_r)
+        runner = self.make_runner(proc)
+        channel = mock.Mock()
+        channel.receive.side_effect = [
+            {"event": "ready", "ok": True}, TimeoutError("start timed out"),
+            {"event": "started", "ok": True, "strategy": "general.bat"},
+            {"event": "restored", "restored": True, "ok": True, "reason": "eof"},
+        ]
+        runner.channel_cls = mock.Mock(return_value=channel)
+        snapshot = runner.snapshot()
+        with self.assertRaisesRegex(RuntimeError, "start timed out"):
+            runner.start("general.bat")
+        runner.stop()
+        with self.assertRaises(RuntimeError):
+            runner.start("general_alt12.bat")
+        runner.restore(snapshot)
+        self.assertTrue(runner.restored)
+        self.assertEqual([args.args[0].get("command") for args in channel.send.call_args_list],
+                         [None, "start"])
+
+    def test_started_reply_must_match_strategy(self):
+        proc = FakeStreamProcess(stdin_fd=self.c2h_w, stdout_fd=self.h2c_r)
+        runner = self.make_runner(proc)
+        self.write_helper_reply({"event": "ready", "ok": True})
+        runner.snapshot()
+        self.write_helper_reply({"event": "started", "ok": True, "strategy": "general_alt12.bat"})
+        with self.assertRaises(RuntimeError):
+            runner.start("general.bat")
+        self.assertIsNone(runner.current_strategy)
+
+    def test_stop_send_failure_closes_session_and_never_sends_again(self):
+        proc = FakeStreamProcess(stdin_fd=self.c2h_w, stdout_fd=self.h2c_r)
+        runner = self.make_runner(proc)
+        channel = mock.Mock()
+        channel.receive.side_effect = [
+            {"event": "ready", "ok": True},
+            {"event": "started", "ok": True, "strategy": "general.bat"},
+            {"event": "restored", "restored": True, "ok": True, "reason": "eof"},
+        ]
+        channel.send.side_effect = [None, None, BrokenPipeError("pipe closed")]
+        runner.channel_cls = mock.Mock(return_value=channel)
+        snapshot = runner.snapshot()
+        runner.start("general.bat")
+        with self.assertRaisesRegex(RuntimeError, "pipe closed"):
+            runner.stop()
+        with self.assertRaises(RuntimeError):
+            runner.start("general.bat")
+        runner.restore(snapshot)
+        self.assertTrue(runner.restored)
+        self.assertEqual(channel.send.call_count, 3)
+
+    def test_helper_can_write_more_than_a_pipe_of_stderr_without_blocking_ready(self):
+        code = ("import os, sys\n"
+                "sys.stdin.buffer.readline()\n"
+                "sys.stderr.buffer.write(b'x' * 262144 + b'diagnostic-tail')\n"
+                "sys.stderr.buffer.flush()\n"
+                "os.write(1,b'{\"event\":\"ready\",\"ok\":true}\\n')\n"
+                "sys.stdin.buffer.readline()\n"
+                "os.write(1,b'{\"event\":\"restored\",\"restored\":true}\\n')\n")
+        with subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+            runner = self.make_runner(proc)
+            snapshot = runner.snapshot()
+            runner.restore(snapshot)
+        self.assertTrue(runner.restored)
+        self.assertLessEqual(len(runner.stderr.data), runner.stderr.LIMIT)
+        self.assertTrue(runner.stderr.data.endswith(b"diagnostic-tail"))
+
+    def test_restore_rejects_success_flag_without_correct_terminal_event(self):
+        proc = FakeStreamProcess(stdin_fd=self.c2h_w, stdout_fd=self.h2c_r)
+        runner = self.make_runner(proc)
+        self.write_helper_reply({"event": "ready", "ok": True})
+        snapshot = runner.snapshot()
+        self.write_helper_reply({"event": "started", "ok": True, "restored": True})
+        with self.assertRaises(RuntimeError):
+            runner.restore(snapshot)
+        self.assertFalse(runner.restored)
 
     def test_restore_normal(self):
         proc = FakeStreamProcess(stdin_fd=self.c2h_w, stdout_fd=self.h2c_r)

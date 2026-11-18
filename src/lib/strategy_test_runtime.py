@@ -216,8 +216,8 @@ class IsolatedNftRun:
         lines = [f'create table inet {self.table} {{ comment "{self.owner}"; }}',
                  f"add chain inet {self.table} post {{ type filter hook postrouting priority mangle; }}",
                  f"add chain inet {self.table} pre {{ type filter hook prerouting priority filter; }}"]
-        out = "" if interface == "any" else f'oifname "{interface}" '
-        inc = "" if interface == "any" else f'iifname "{interface}" '
+        out = 'oifname != "lo" ' if interface == "any" else f'oifname "{interface}" '
+        inc = 'iifname != "lo" ' if interface == "any" else f'iifname "{interface}" '
         for protocol, key in (("tcp", "tcp_ports"), ("udp", "udp_ports")):
             ports = plan[key]
             if not isinstance(ports, str) or (ports and not re.fullmatch(r"[0-9,-]+", ports)):

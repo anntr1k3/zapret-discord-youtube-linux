@@ -14,31 +14,35 @@ fi
 
 MODE="${1:---user}"
 
-if [ "$MODE" = "--system" ]; then
-    if [ "$(id -u)" -ne 0 ]; then
-        echo "Для системной установки (--system) требуются права root (sudo)." >&2
-        exit 1
-    fi
-    APPS_DIR="/usr/share/applications"
-    ICONS_DIR="/usr/share/icons/hicolor/scalable/apps"
-    BIN_DIR="/usr/local/bin"
-else
-    APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-    ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
-    BIN_DIR="${HOME}/.local/bin"
+if [[ "$MODE" != --user || $# -gt 1 || "$EUID" == 0 ]]; then
+    echo "Запустите --user без sudo. Системные ярлыки поставляет пакет приложения." >&2
+    exit 1
 fi
+
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
+BIN_DIR="${HOME}/.local/bin"
+
+# Preflight both destinations before changing any desktop files.
+for command in zapret zapret-gui; do
+    source_launcher="$REPO_DIR/bin/$command"
+    dest="$BIN_DIR/$command"
+    [[ -x "$source_launcher" ]] || { echo "Нет launcher: $source_launcher" >&2; exit 1; }
+    if [[ -e "$dest" || -L "$dest" ]]; then
+        if [[ ! -L "$dest" || "$(readlink -- "$dest")" != "$source_launcher" ]]; then
+            echo "Уже существует $dest; перенесите этот файл отдельно перед установкой ярлыков." >&2
+            exit 1
+        fi
+    fi
+done
 
 mkdir -p "$APPS_DIR" "$ICONS_DIR" "$BIN_DIR"
 install -m 644 "$ICON_SRC" "$ICONS_DIR/zapret-gui.svg"
 install -m 644 "$DESKTOP_SRC" "$APPS_DIR/zapret-gui.desktop"
 
-# Install CLI launchers
-if [ -f "$REPO_DIR/bin/zapret-gui" ]; then
-    install -m 755 "$REPO_DIR/bin/zapret-gui" "$BIN_DIR/zapret-gui"
-fi
-if [ -f "$REPO_DIR/bin/zapret" ]; then
-    install -m 755 "$REPO_DIR/bin/zapret" "$BIN_DIR/zapret"
-fi
+for command in zapret zapret-gui; do
+    [[ -L "$BIN_DIR/$command" ]] || ln -sT -- "$REPO_DIR/bin/$command" "$BIN_DIR/$command"
+done
 
 # Refresh desktop and icon caches if utilities are available
 if command -v update-desktop-database >/dev/null 2>&1; then

@@ -11,62 +11,82 @@ COLOR_RED="\033[31m"
 
 echo -e "${COLOR_CYAN}${COLOR_BOLD}=== 🛡️ Установка Zapret Discord & YouTube Linux ===${COLOR_RESET}\n"
 
-# 1. Determine working directory or clone repository if piped via curl
 REPO_URL="https://github.com/anntr1k3/zapret-discord-youtube-linux.git"
 INSTALL_TARGET="${HOME}/zapret-discord-youtube-linux"
 
-if [ -f "./service.sh" ] && [ -f "./gui.py" ]; then
-    PROJECT_DIR="$(pwd)"
-    echo -e "${COLOR_GREEN}✓ Запуск из локального репозитория:${COLOR_RESET} $PROJECT_DIR"
-else
-    if [ ! -d "$INSTALL_TARGET" ]; then
-        echo -e "${COLOR_YELLOW}Клонирование репозитория в $INSTALL_TARGET...${COLOR_RESET}"
-        git clone "$REPO_URL" "$INSTALL_TARGET"
-    else
-        echo -e "${COLOR_GREEN}✓ Найден каталог $INSTALL_TARGET, обновление...${COLOR_RESET}"
-        git -C "$INSTALL_TARGET" pull --ff-only || true
-    fi
-    PROJECT_DIR="$INSTALL_TARGET"
+if ((EUID == 0)); then
+    echo "Запустите сценарий обычным пользователем; sudo нужен только пакетному менеджеру." >&2
+    exit 1
 fi
 
-cd "$PROJECT_DIR"
-
-# 2. Package manager dependency check
+# Git must be present before clone. No dependency errors are suppressed.
 echo -e "\n${COLOR_BOLD}[1/4] Проверка системных зависимостей...${COLOR_RESET}"
 
 MISSING_PKGS=()
 if command -v apt-get >/dev/null 2>&1; then
-    for pkg in python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 nftables curl git; do
-        if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+    for pkg in python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 nftables curl git util-linux; do
+        if [[ "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null || :)" != "install ok installed" ]]; then
             MISSING_PKGS+=("$pkg")
         fi
     done
     if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
         echo -e "${COLOR_YELLOW}Необходимо установить пакеты: ${MISSING_PKGS[*]}${COLOR_RESET}"
         echo "Запуск sudo apt-get update && sudo apt-get install -y ${MISSING_PKGS[*]}"
-        sudo apt-get update && sudo apt-get install -y "${MISSING_PKGS[@]}"
+        sudo apt-get update
+        sudo apt-get install -y "${MISSING_PKGS[@]}"
     fi
 elif command -v pacman >/dev/null 2>&1; then
     echo -e "${COLOR_CYAN}Arch Linux обнаружен.${COLOR_RESET}"
-    sudo pacman -S --needed --noconfirm python python-gobject gtk4 libadwaita nftables curl git || true
+    sudo pacman -S --needed --noconfirm python python-gobject gtk4 libadwaita nftables curl git util-linux
 elif command -v dnf >/dev/null 2>&1; then
     echo -e "${COLOR_CYAN}Fedora/RHEL обнаружен.${COLOR_RESET}"
-    sudo dnf install -y python3 python3-gobject gtk4 libadwaita nftables curl git || true
+    sudo dnf install -y python3 python3-gobject gtk4 libadwaita nftables curl git util-linux
 fi
 
-echo -e "${COLOR_GREEN}✓ Все системные зависимости установлены.${COLOR_RESET}"
+for cmd in git curl flock; do
+    command -v "$cmd" >/dev/null || { echo "Установите $cmd и повторите запуск." >&2; exit 1; }
+done
+/usr/bin/python3 - <<'PY'
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw
+if (Adw.get_major_version(), Adw.get_minor_version()) < (1, 5):
+    raise SystemExit("Требуется libadwaita >= 1.5")
+PY
 
-# 3. Download / check nfqws and strategies
+# Resolve a file invocation relative to the script, not to the caller's CWD.
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+if [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]]; then
+    PROJECT_DIR="$(dirname "$(realpath -- "$SCRIPT_PATH")")"
+else
+    PROJECT_DIR="$INSTALL_TARGET"
+    if [[ ! -e "$PROJECT_DIR" ]]; then
+        git clone "$REPO_URL" "$PROJECT_DIR"
+    elif [[ -e "$PROJECT_DIR/.git" ]]; then
+        git -C "$PROJECT_DIR" pull --ff-only
+    else
+        echo "Каталог $PROJECT_DIR не является ожидаемым checkout." >&2
+        exit 1
+    fi
+fi
+
 echo -e "\n${COLOR_BOLD}[2/4] Подготовка зависимостей ядра и стратегий Flowseal...${COLOR_RESET}"
-./service.sh download-deps --default
+if [[ -x "$PROJECT_DIR/nfqws" && -d "$PROJECT_DIR/zapret-latest" ]]; then
+    echo "Существующие nfqws и стратегии сохранены."
+elif [[ -e "$PROJECT_DIR/nfqws" || -e "$PROJECT_DIR/zapret-latest" ]]; then
+    echo "Неполный runtime в $PROJECT_DIR: проверьте файлы перед загрузкой зависимостей." >&2
+    exit 1
+else
+    "$PROJECT_DIR/service.sh" download-deps --default
+fi
 
-# 4. Install Desktop entry and CLI launchers
 echo -e "\n${COLOR_BOLD}[3/4] Установка интеграции с рабочим столом и CLI утилит...${COLOR_RESET}"
-./src/desktop/install-desktop.sh --user
+"$PROJECT_DIR/src/desktop/install-desktop.sh" --user
 
-# 5. Summary and Next steps
 echo -e "\n${COLOR_BOLD}[4/4] Завершение настройки...${COLOR_RESET}"
-echo -e "${COLOR_GREEN}${COLOR_BOLD}=== ✨ Zapret успешно установлен и готов к работе! ===${COLOR_RESET}\n"
+echo -e "${COLOR_GREEN}${COLOR_BOLD}=== Пользовательская копия Zapret подготовлена ===${COLOR_RESET}\n"
+echo "Управляемый сервис не устанавливался. Для установки из GUI нужен доверенный пакет приложения."
 echo -e "Способы запуска:"
 echo -e "  • ${COLOR_CYAN}zapret-gui${COLOR_RESET}     — открыть нативный графический интерфейс GTK4"
 echo -e "  • ${COLOR_CYAN}zapret${COLOR_RESET}         — консольное интерактивное меню управления"

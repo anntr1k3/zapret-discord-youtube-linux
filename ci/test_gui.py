@@ -226,12 +226,12 @@ class BackendTests(unittest.TestCase):
 
     def test_remove_service_calls_helper_protocol(self):
         self.backend.managed = mock.Mock(return_value=True)
-        self.backend.call_helper = mock.Mock(return_value={"removed": True, "purged": False})
+        self.backend.call_bootstrap = mock.Mock(return_value={"removed": True, "purged": False})
         self.backend.loaded_config = {"some": "config"}
         self.backend.status_report = {"some": "report"}
         result = self.backend.remove_service(purge=False)
         self.assertEqual(result, {"removed": True, "purged": False})
-        self.backend.call_helper.assert_called_once_with("remove-service", {"purge": False})
+        self.backend.call_bootstrap.assert_called_once_with("remove-service", {"purge": False})
         self.assertIsNone(self.backend.loaded_config)
         self.assertIsNone(self.backend.status_report)
 
@@ -240,22 +240,65 @@ class BackendTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "уже установлен"):
             self.backend.install_service()
 
-    def test_install_service_validates_strategy_and_executes_pkexec(self):
+    def test_install_service_uses_only_bootstrap_protocol(self):
+        self.backend.workspace = self.tmp
+        (self.tmp / "install.py").write_text("# untrusted fixture\n")
         self.backend.managed = mock.Mock(return_value=False)
-        self.backend.profiles = mock.Mock(return_value=["general.bat", "general_alt.bat"])
+        self.backend.call_bootstrap = mock.Mock(return_value={"installed": True, "started": True})
         with self.assertRaisesRegex(ValueError, "Некорректное имя"):
             self.backend.install_service(strategy="bad/name.sh")
-        with self.assertRaisesRegex(ValueError, "отсутствует"):
-            self.backend.install_service(strategy="missing.bat")
-        with mock.patch.object(self.module.subprocess, "run",
-                               return_value=subprocess.CompletedProcess([], 0, "installed", "")) as run:
+        with mock.patch.object(self.module.subprocess, "run", side_effect=AssertionError("checkout elevation")):
             result = self.backend.install_service(strategy="general.bat", start=True)
         self.assertEqual(result, {"installed": True, "started": True})
-        argv = run.call_args.args[0]
-        self.assertEqual(argv[:3], ["/usr/bin/pkexec", "/usr/bin/python3", "-I"])
-        self.assertTrue(argv[3].endswith("install.py"))
-        self.assertEqual(argv[4:7], ["install", "--source", str(ROOT)])
-        self.assertEqual(argv[7], "--start")
+        self.backend.call_bootstrap.assert_called_once_with(
+            "install-service", {"strategy": "general.bat", "start": True})
+
+    def test_install_without_bootstrap_never_elevates_or_writes_config(self):
+        self.backend.workspace = self.tmp
+        (self.tmp / "install.py").write_text("raise AssertionError('untrusted')\n")
+        config = self.tmp / "conf.env"
+        original = b"strategy=old.bat\n"
+        for exists in (True, False):
+            with self.subTest(existing_config=exists):
+                if exists:
+                    config.write_bytes(original)
+                else:
+                    config.unlink(missing_ok=True)
+                with mock.patch.object(self.module, "APPLICATION", self.tmp / "missing-app", create=True), \
+                        mock.patch.object(self.module.subprocess, "run") as run:
+                    with self.assertRaisesRegex(RuntimeError, "доверенн"):
+                        self.backend.install_service("general.bat")
+                run.assert_not_called()
+                self.assertEqual(config.read_bytes() if config.exists() else None,
+                                 original if exists else None)
+
+    def test_cancelled_bootstrap_never_changes_workspace_config(self):
+        self.backend.workspace = self.tmp
+        config = self.tmp / "conf.env"
+        config.write_bytes(b"strategy=old.bat\n")
+        self.backend.trusted_bootstrap = mock.Mock(return_value=Path("/trusted/bootstrap.py"))
+        for code in (126, 127):
+            with self.subTest(code=code), mock.patch.object(
+                    self.module.subprocess, "run",
+                    return_value=subprocess.CompletedProcess([], code, "", "")) as run:
+                with self.assertRaisesRegex(RuntimeError, "Авторизация"):
+                    self.backend.install_service("general.bat")
+                self.assertEqual(config.read_bytes(), b"strategy=old.bat\n")
+                self.assertEqual(run.call_args.args[0], [
+                    "/usr/bin/pkexec", "/usr/bin/python3", "-I",
+                    "/trusted/bootstrap.py", "install-service"])
+                self.assertEqual(json.loads(run.call_args.kwargs["input"]),
+                                 {"strategy": "general.bat", "start": True})
+
+    def test_before_service_install_profiles_come_from_packaged_runtime(self):
+        application = self.tmp / "application"
+        catalog = application / "runtime/zapret-latest"
+        catalog.mkdir(parents=True)
+        (catalog / "general_alt12.bat").write_text("# packaged strategy\n")
+        self.backend.trusted_bootstrap = mock.Mock(return_value=application / "src/gui/bootstrap.py")
+        with mock.patch.object(self.module, "APPLICATION", application):
+            self.assertEqual(self.backend.base(), application / "runtime")
+            self.assertEqual(self.backend.profiles(), ["general_alt12.bat"])
 
     def test_demo_service_lifecycle_remove_and_install(self):
         demo = self.module.DemoBackend()
@@ -454,7 +497,8 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(result, {"removed": True, "purged": True})
         self.assertIsNone(self.installer.state())
         self.assertFalse(self.installer.data.exists())
-        self.assertFalse(self.installer.state_dir.exists())
+        self.assertEqual({path.name for path in self.installer.state_dir.iterdir()},
+                         {".managed", ".install.lock"})
 
     def test_remove_service_validates_payload(self):
         for payload in ({}, {"purge": "true"}, {"purge": 1}, {"extra": False}):

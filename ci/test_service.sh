@@ -2,6 +2,12 @@
 
 set -e
 
+if [[ "$#" != 1 || "$1" != --acknowledge-disposable-vm || "$EUID" != 0 ||
+      ! -f /var/tmp/zapret-vm-provisioned || "$(hostname)" != zapret-integration ]]; then
+    echo "Тест разрешён только в отмеченной одноразовой VM с --acknowledge-disposable-vm." >&2
+    exit 2
+fi
+
 # =============================================================================
 # CI E2E тест: проверка install/remove/start/stop сервиса
 # =============================================================================
@@ -53,7 +59,6 @@ check_nft_rules_exist() {
 cleanup() {
     print_status info "Финальная очистка..."
     "$BASE_DIR/service.sh" service remove 2>/dev/null || true
-    sudo pkill -f nfqws 2>/dev/null || true
     "$BASE_DIR/service.sh" kill >/dev/null 2>&1 || true
 }
 

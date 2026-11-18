@@ -189,6 +189,8 @@ class IsolationTests(unittest.TestCase):
         self.assertNotIn("--dry-run", argv)
         script = next(kwargs["input"] for argv, kwargs in self.calls if "input" in kwargs)
         self.assertIn("create table inet zapret_test_", script)
+        self.assertIn('post oifname != "lo" ', script)
+        self.assertIn('pre iifname != "lo" ', script)
         self.assertNotIn("zapretunix", script)
         self.assertIn("queue num 41220 bypass", script)
         self.assertFalse(self.popen.call_args.kwargs.get("shell", False))

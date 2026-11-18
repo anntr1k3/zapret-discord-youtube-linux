@@ -62,7 +62,7 @@ print(json.dumps(actions[action]()))
     checkout = user("snapshot")["versions"]
     require(checkout["scope"] == "checkout" and checkout["installed_app"] is None,
             "uninstalled source is labelled checkout, not a system installation")
-    require(checkout["running_app"]["version"] == "1.0.0-dev" and not checkout["running_app"]["release"],
+    require(checkout["running_app"]["version"] == "1.0.1-rc1" and not checkout["running_app"]["release"],
             "development application version is explicitly not a release")
     installed = False
     try:
@@ -71,7 +71,7 @@ print(json.dumps(actions[action]()))
         before = tree_hashes(DATA)
         original_code = tree_hashes((APP / "current").resolve() / "src")
         initial = user("snapshot")["versions"]
-        require(initial["scope"] == "installed" and initial["installed_app"]["version"] == "1.0.0-dev",
+        require(initial["scope"] == "installed" and initial["installed_app"]["version"] == "1.0.1-rc1",
                 "packaged src application metadata survives real install and is user-readable")
         require(initial["current"]["revision"] is None and initial["relation"] == "unknown",
                 "legacy data without provenance remains unknown, not service.bat version")

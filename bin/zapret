@@ -7,12 +7,16 @@ if [ -f "/opt/zapret-discord-youtube/current/service.sh" ]; then
 fi
 
 # 2. Relative to script directory (when installed alongside repo)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_PATH="$(realpath -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$(dirname "$SCRIPT_PATH")")"
 if [ -f "$SCRIPT_DIR/service.sh" ]; then
     exec "$SCRIPT_DIR/service.sh" "$@"
 fi
 
-# 3. Known user repository path
+# 3. Default install.sh checkout, then compatibility with older launchers
+if [ -f "$HOME/zapret-discord-youtube-linux/service.sh" ]; then
+    exec "$HOME/zapret-discord-youtube-linux/service.sh" "$@"
+fi
 if [ -f "$HOME/Документы/zapret-discord-youtube-linux/service.sh" ]; then
     exec "$HOME/Документы/zapret-discord-youtube-linux/service.sh" "$@"
 fi

@@ -495,18 +495,8 @@ def dispatch(installer, action, payload):
         installer.rollback()
         return {"rolled_back": True}
     if action == "remove-service":
-        installer.remove()
         purge = payload["purge"]
-        if purge:
-            if installer.data.is_dir():
-                shutil.rmtree(installer.data)
-            if installer.state_dir.is_dir():
-                shutil.rmtree(installer.state_dir)
-            if installer.app.is_dir():
-                try:
-                    installer.app.rmdir()
-                except OSError:
-                    pass
+        installer.remove(purge=purge)
         return {"removed": True, "purged": purge}
     with installer.operation():
         if action in ("read-tcp-timestamps", "enable-tcp-timestamps"):

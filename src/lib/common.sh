@@ -44,7 +44,7 @@ show_error() {
 
 check_dependencies() {
     export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
-    local deps=("git" "grep" "sed" "curl")
+    local deps=("git" "grep" "sed" "curl" "flock")
 
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" >/dev/null 2>&1; then
@@ -269,9 +269,8 @@ setup_repository() {
             handle_error "Ошибка при клонировании репозитория. Проверьте, что версия '$version' существует."
     fi
 
-    chmod +x "$BASE_DIR/src/rename_bat.sh"
     rm -rf "$REPO_DIR/.git"
-    "$BASE_DIR/src/rename_bat.sh" || handle_error "Ошибка при переименовании файлов"
+    bash "$BASE_DIR/src/rename_bat.sh" "$REPO_DIR" || handle_error "Ошибка при переименовании файлов"
 
     # Создаём пользовательские списки (только если в стратегиях есть директория lists)
     if [[ -d "$REPO_DIR/lists" ]]; then

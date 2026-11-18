@@ -2,76 +2,56 @@ name: Test Strategies & Services
 
 on:
   push:
-    branches: [master]
+    branches: [master, 'ci/rc-1.0.1']
   pull_request:
     branches: [master]
 
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
 jobs:
   test-regressions:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: All offline Python tests (no root, network or host changes)
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
+        with:
+          persist-credentials: false
+      - name: Offline Python tests
         run: python3 -m unittest discover -s ci -p 'test_*.py'
 
-  #######################################################################
-  # Strategy tests (native Ubuntu)
-  #######################################################################
-  test-strategies:
-    runs-on: ubuntu-latest
-
+  test-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y nftables git
-
-      - name: Download dependencies
-        run: ./service.sh download-deps --default
-
-      - name: List available strategies
-        run: ./service.sh strategy list
-
-      - name: Run strategy tests
-        uses: nick-fields/retry@v3
         with:
-          max_attempts: 3
-          timeout_minutes: 5
-          command: sudo ./ci/test_strategies.sh
-
-  #######################################################################
-  # Service tests (real init systems)
-  #######################################################################
-  test-service:
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - init: systemd
-            type: native
-
-    steps:
-      - uses: actions/checkout@v4
-
-      ###################################################################
-      # Native systemd
-      ###################################################################
-      - name: Install dependencies (native)
-        if: matrix.type == 'native'
+          persist-credentials: false
+      - name: Build a candidate with pinned upstream inputs
+        shell: bash
+        run: |
+          scripts/build-deb.sh --output "$RUNNER_TEMP/zapret-package"
+          packages=("$RUNNER_TEMP"/zapret-package/*.deb)
+          test "${#packages[@]}" -eq 1 && test -f "${packages[0]}"
+          echo "ZAPRET_TEST_DEB=${packages[0]}" >> "$GITHUB_ENV"
+      - name: Inspect archive and dry-run all packaged profiles
+        run: |
+          python3 -m unittest ci.test_deb
+          python3 ci/check_deb_runtime.py "$ZAPRET_TEST_DEB"
+      - name: Mark and check GitHub-hosted disposable VM
+        run: |
+          systemd-detect-virt --vm
+          sudo hostnamectl set-hostname zapret-integration
+          # Keep sudo hostname lookups local after renaming the guest.
+          printf '127.0.1.1 zapret-integration\n' | sudo tee -a /etc/hosts
+          sudo install -o root -g root -m 0644 /dev/null /var/tmp/zapret-vm-provisioned
+      - name: Package lifecycle and tester through real systemd and nftables
         run: |
           sudo apt-get update
-          sudo apt-get install -y nftables git
-
-      - name: Run tests (native)
+          sudo python3 ci/vm_deb_smoke.py "$ZAPRET_TEST_DEB" --tester --acknowledge-disposable-vm
+      - name: GTK demo smoke from the installed application (no root)
         run: |
-          sudo install -d -m 0755 -o root -g root /opt/zapret-ci
-          sudo cp -a "$GITHUB_WORKSPACE/." /opt/zapret-ci/
-          sudo chown -R root:root /opt/zapret-ci
-          sudo chmod -R go-w /opt/zapret-ci
-          sudo /opt/zapret-ci/ci/test_service.sh
+          sudo apt-get install -y xvfb xauth
+          xvfb-run --auto-servernum /usr/bin/zapret-gui --demo --tester --smoke-test

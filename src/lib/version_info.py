@@ -27,12 +27,25 @@ def application(base):
         data = read_metadata(Path(base) / "src/app-version.json")
         if (data.get("schema") != 1 or not isinstance(data.get("version"), str)
                 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?", data["version"])
-                or type(data.get("release")) is not bool):
+                or type(data.get("release")) is not bool
+                or (data["release"] and "-" in data["version"])):
             raise ValueError("Некорректные метаданные версии Linux-приложения")
         result.update(version=data["version"], release=data["release"])
     except (OSError, ValueError) as error:
         result["error"] = f"Версия Linux-приложения неизвестна: {error}"
     return result
+
+
+def debian_version(base):
+    metadata = application(base)
+    if metadata["error"]:
+        raise ValueError(metadata["error"])
+    version = metadata["version"]
+    if metadata["release"]:
+        return version
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-rc[1-9][0-9]*", version):
+        raise ValueError("Для Debian нужен стабильный номер версии или явный кандидат -rcN")
+    return version.replace("-rc", "~rc", 1)
 
 
 def unknown_target(error):
@@ -62,7 +75,7 @@ def flowseal(base):
         return unknown_target(f"Версия набора Flowseal неизвестна: {error}")
 
 
-def summary(workspace, current, base, managed, last_check):
+def summary(workspace, current, base, managed, last_check, *, packaged=False):
     installed = flowseal(base)
     if isinstance(last_check, dict) and last_check.get("status") == "checked":
         checked = target_info(last_check)
@@ -75,5 +88,6 @@ def summary(workspace, current, base, managed, last_check):
     if installed["revision"] and checked["revision"]:
         relation = "same" if installed["revision"] == checked["revision"] else "different"
     return {"running_app": application(workspace), "installed_app": application(current) if managed else None,
-            "scope": "installed" if managed else "checkout", "current": installed, "checked": checked,
+            "scope": "installed" if managed else "package" if packaged else "checkout",
+            "current": installed, "checked": checked,
             "relation": relation, "source_url": SOURCE_URL}
