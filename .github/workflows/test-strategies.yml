@@ -42,11 +42,19 @@ jobs:
           python3 ci/check_deb_runtime.py "$ZAPRET_TEST_DEB"
       - name: Mark and check GitHub-hosted disposable VM
         run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
           systemd-detect-virt --vm
           sudo hostnamectl set-hostname zapret-integration
           # Keep sudo hostname lookups local after renaming the guest.
           printf '127.0.1.1 zapret-integration\n' | sudo tee -a /etc/hosts
           sudo install -o root -g root -m 0644 /dev/null /var/tmp/zapret-vm-provisioned
+          # Hosted images may leave /opt writable for tool provisioning. The
+          # production installer must reject such a parent, not adopt it.
+          test -d /opt && test ! -L /opt
+          stat -c 'Before: %U:%G %a %n' /opt
+          sudo chown root:root /opt
+          sudo chmod go-w /opt
+          stat -c 'After: %U:%G %a %n' /opt
       - name: Package lifecycle and tester through real systemd and nftables
         run: |
           sudo apt-get update
