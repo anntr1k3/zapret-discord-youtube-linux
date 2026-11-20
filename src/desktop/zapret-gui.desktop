@@ -34,5 +34,5 @@ Icon=view-refresh
 [Desktop Action RunTester]
 Name=Тестировщик стратегий
 Name[en]=Test Strategies
-Exec=zapret-gui --demo
+Exec=zapret-gui --tester
 Icon=network-transmit-receive

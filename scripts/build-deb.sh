@@ -1,132 +1,131 @@
 #!/usr/bin/env bash
-# Build Debian/Ubuntu .deb package for zapret-discord-youtube
+# Build the application package without installing or starting the service.
 set -euo pipefail
+umask 022
+export PYTHONDONTWRITEBYTECODE=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-
 PKG_NAME="zapret-discord-youtube"
-PKG_VERSION="1.0.0"
-PKG_ARCH="$(dpkg --print-architecture 2>/dev/null || echo "amd64")"
-PKG_FULLNAME="${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}"
+OUTPUT="$REPO_DIR/dist"
+INPUTS=""
 
-DIST_DIR="$REPO_DIR/dist"
-BUILD_DIR="$(mktemp -d -t "zapret-deb-XXXXXX")"
-trap 'rm -rf "$BUILD_DIR"' EXIT
+while (($#)); do
+    case "$1" in
+        --inputs|--output)
+            if (($# < 2)) || [[ -z "$2" || "$2" == --* ]]; then
+                echo "Требуется каталог для $1" >&2
+                exit 2
+            fi
+            if [[ "$1" == --inputs ]]; then INPUTS="$2"; else OUTPUT="$2"; fi
+            shift 2 ;;
+        -h|--help)
+            echo "Usage: build-deb.sh [--inputs ARCHIVE_DIR] [--output OUTPUT_DIR]"
+            exit 0 ;;
+        *) echo "Неизвестный параметр: $1" >&2; exit 2 ;;
+    esac
+done
 
-echo "=== 📦 Сборка .deb-пакета $PKG_FULLNAME ==="
+if ((EUID == 0)); then
+    echo "Сборка пакета не требует root." >&2
+    exit 1
+fi
+ARCH="$(dpkg --print-architecture)"
+if [[ "$ARCH" != amd64 ]]; then
+    echo "Доверенный payload закреплён только для amd64, получено: $ARCH" >&2
+    exit 1
+fi
+PKG_VERSION="$(python3 -B - "$REPO_DIR" <<'PY'
+from pathlib import Path
+import sys
 
-mkdir -p "$DIST_DIR"
-mkdir -p "$BUILD_DIR/DEBIAN"
-mkdir -p "$BUILD_DIR/opt/$PKG_NAME/current"
-mkdir -p "$BUILD_DIR/usr/bin"
-mkdir -p "$BUILD_DIR/usr/share/applications"
-mkdir -p "$BUILD_DIR/usr/share/icons/hicolor/scalable/apps"
+base = Path(sys.argv[1])
+sys.path.insert(0, str(base / "src/lib"))
+from version_info import debian_version
 
-# 1. DEBIAN/control
-cat <<EOF > "$BUILD_DIR/DEBIAN/control"
+try:
+    print(debian_version(base))
+except ValueError as error:
+    sys.exit(str(error))
+PY
+)"
+
+WORK="$(mktemp -d -t zapret-deb-XXXXXX)"
+trap 'rm -rf -- "$WORK"' EXIT
+STAGE="$WORK/package"
+APP="$STAGE/usr/lib/$PKG_NAME"
+DOC="$STAGE/usr/share/doc/$PKG_NAME"
+install -d "$APP/runtime" "$DOC" "$STAGE/DEBIAN" "$STAGE/usr/bin" \
+    "$STAGE/usr/share/applications" "$STAGE/usr/share/icons/hicolor/scalable/apps"
+
+if [[ -z "$INPUTS" ]]; then
+    INPUTS="$WORK/inputs"
+    install -d "$INPUTS"
+    curl_opts=(--fail --location --silent --show-error --proto '=https'
+               --proto-redir '=https' --max-time 120 --max-filesize 33554432)
+    curl "${curl_opts[@]}" \
+        https://github.com/bol-van/zapret/releases/download/v72.9/zapret-v72.9.tar.gz \
+        -o "$INPUTS/zapret-v72.9.tar.gz"
+    curl "${curl_opts[@]}" \
+        https://codeload.github.com/Flowseal/zapret-discord-youtube/zip/176f56dc3f11ce5915c26abcdde903f93d835b64 \
+        -o "$INPUTS/flowseal.zip"
+fi
+python3 "$SCRIPT_DIR/stage-deb-runtime.py" "$INPUTS" "$APP/runtime" "$DOC"
+
+install -m 644 "$REPO_DIR"/{gui.py,sync.py,install.py} "$APP/"
+install -m 755 "$REPO_DIR/service.sh" "$APP/runtime/"
+for tree in src custom-strategies; do
+    cp -R -- "$REPO_DIR/$tree" "$WORK/$tree"
+    find "$WORK/$tree" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+    find "$WORK/$tree" -type f -name '*.pyc' -delete
+    if [[ -n "$(find "$WORK/$tree" ! -type d ! -type f -print -quit)" ]]; then
+        echo "Ссылки и специальные файлы запрещены: $tree" >&2
+        exit 1
+    fi
+    cp -R -- "$WORK/$tree" "$APP/runtime/"
+done
+cp -R -- "$WORK/src" "$APP/"
+rm -- "$APP/runtime/src/gui/bootstrap.py"
+install -m 644 "$REPO_DIR/LICENSE" "$DOC/copyright"
+install -m 644 "$REPO_DIR/src/desktop/zapret-gui.desktop" "$STAGE/usr/share/applications/"
+install -m 644 "$REPO_DIR/src/desktop/zapret-gui.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/"
+
+cat > "$STAGE/DEBIAN/control" <<EOF
 Package: $PKG_NAME
 Version: $PKG_VERSION
 Section: net
 Priority: optional
-Architecture: $PKG_ARCH
-Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, nftables | iptables, curl, polkitd | policykit-1
-Maintainer: anntr1k3 <https://github.com/anntr1k3/zapret-discord-youtube-linux>
+Architecture: $ARCH
+Depends: bash, python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.5), systemd, nftables, pkexec | policykit-1 (<< 122), polkitd | policykit-1 (<< 122), curl, ca-certificates, iputils-ping, iproute2, procps, git, util-linux
+Maintainer: anntr1k3 <154975524+anntr1k3@users.noreply.github.com>
 Homepage: https://github.com/anntr1k3/zapret-discord-youtube-linux
-Description: Zapret Discord & YouTube Linux - GTK4 GUI and system service adapter
- Full-featured Linux port of Flowseal zapret-discord-youtube with native
- GTK4/libadwaita graphical interface, pkexec root privilege separation,
- systemd service lifecycle manager, deep conflict diagnostics, and
- streaming strategy tester.
+Description: GTK4 interface and packaged runtime for Zapret
+ Install or remove the managed systemd service separately from the
+ application. Installing the package does not enable or start the service.
 EOF
 
-# 2. Maintainer scripts
-cat <<'EOF' > "$BUILD_DIR/DEBIAN/postinst"
+cat > "$STAGE/usr/bin/zapret-gui" <<'EOF'
 #!/bin/sh
-set -e
-if [ "$1" = "configure" ]; then
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl daemon-reload || true
-    fi
-    if command -v update-desktop-database >/dev/null 2>&1; then
-        update-desktop-database /usr/share/applications || true
-    fi
-    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-        gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
-    fi
-fi
-exit 0
+exec /usr/bin/python3 /usr/lib/zapret-discord-youtube/gui.py "$@"
 EOF
-chmod 755 "$BUILD_DIR/DEBIAN/postinst"
-
-cat <<'EOF' > "$BUILD_DIR/DEBIAN/prerm"
+cat > "$STAGE/usr/bin/zapret" <<'EOF'
 #!/bin/sh
-set -e
-if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl stop zapret_discord_youtube.service 2>/dev/null || true
-        systemctl disable zapret_discord_youtube.service 2>/dev/null || true
-    fi
+runtime=/opt/zapret-discord-youtube/current
+if [ ! -x "$runtime/service.sh" ] || [ ! -f "$runtime/.system-install" ]; then
+    echo "Управляемый сервис не установлен. Используйте zapret-gui." >&2
+    exit 1
 fi
-exit 0
+exec "$runtime/service.sh" "$@"
 EOF
-chmod 755 "$BUILD_DIR/DEBIAN/prerm"
 
-cat <<'EOF' > "$BUILD_DIR/DEBIAN/postrm"
-#!/bin/sh
-set -e
-if [ "$1" = "purge" ]; then
-    rm -rf /opt/zapret-discord-youtube 2>/dev/null || true
-fi
-if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload || true
-fi
-exit 0
-EOF
-chmod 755 "$BUILD_DIR/DEBIAN/postrm"
+find "$STAGE" -type d -exec chmod 755 {} +
+find "$STAGE" -type f -exec chmod 644 {} +
+find "$APP" -type f -name '*.sh' -exec chmod 755 {} +
+chmod 755 "$APP/runtime/nfqws" "$STAGE/usr/bin/"{zapret,zapret-gui}
 
-# 3. Payload copy to /opt/zapret-discord-youtube/current
-TARGET_OPT="$BUILD_DIR/opt/$PKG_NAME/current"
-cp -r "$REPO_DIR/src" "$TARGET_OPT/"
-cp -r "$REPO_DIR/docs" "$TARGET_OPT/"
-cp "$REPO_DIR/gui.py" "$TARGET_OPT/"
-cp "$REPO_DIR/service.sh" "$TARGET_OPT/"
-cp "$REPO_DIR/install.py" "$TARGET_OPT/"
-cp "$REPO_DIR/auto_tune.sh" "$TARGET_OPT/"
-cp "$REPO_DIR/auto_tune_youtube.sh" "$TARGET_OPT/"
-cp "$REPO_DIR/LICENSE" "$TARGET_OPT/"
-cp "$REPO_DIR/README.md" "$TARGET_OPT/"
-cp "$REPO_DIR/RELEASE_NOTES_v1.0.md" "$TARGET_OPT/"
-
-if [ -d "$REPO_DIR/custom-strategies" ]; then
-    cp -r "$REPO_DIR/custom-strategies" "$TARGET_OPT/"
-fi
-
-# Clean up pycache inside package payload
-find "$TARGET_OPT" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-find "$TARGET_OPT" -name "*.pyc" -delete 2>/dev/null || true
-
-# 4. /usr/bin CLI wrapper symlinks
-cat <<'EOF' > "$BUILD_DIR/usr/bin/zapret-gui"
-#!/bin/sh
-exec /usr/bin/python3 /opt/zapret-discord-youtube/current/gui.py "$@"
-EOF
-chmod 755 "$BUILD_DIR/usr/bin/zapret-gui"
-
-cat <<'EOF' > "$BUILD_DIR/usr/bin/zapret"
-#!/bin/sh
-exec /opt/zapret-discord-youtube/current/service.sh "$@"
-EOF
-chmod 755 "$BUILD_DIR/usr/bin/zapret"
-
-# 5. Desktop and Icon
-cp "$REPO_DIR/src/desktop/zapret-gui.desktop" "$BUILD_DIR/usr/share/applications/"
-cp "$REPO_DIR/src/desktop/zapret-gui.svg" "$BUILD_DIR/usr/share/icons/hicolor/scalable/apps/"
-
-# 6. Build package with dpkg-deb
-DEB_FILE="$DIST_DIR/${PKG_FULLNAME}.deb"
-dpkg-deb --build --root-owner-group "$BUILD_DIR" "$DEB_FILE"
-
-echo "✓ Пакет успешно собран:"
-echo "  $DEB_FILE ($(du -h "$DEB_FILE" | cut -f1))"
-echo "  Установка: sudo apt install ./dist/${PKG_FULLNAME}.deb"
+# No maintainer scripts: package operations must not touch the managed service.
+NAME="${PKG_NAME}_${PKG_VERSION}_${ARCH}.deb"
+dpkg-deb --build --root-owner-group "$STAGE" "$WORK/$NAME"
+mkdir -p -- "$OUTPUT"
+install -m 644 "$WORK/$NAME" "$OUTPUT/$NAME"
+sha256sum -- "$OUTPUT/$NAME"

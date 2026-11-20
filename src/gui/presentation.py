@@ -131,16 +131,19 @@ def version_text(info):
     def app_text(app):
         if not app or not app.get("version"):
             return "версия неизвестна"
-        return app["version"] + (" · релиз" if app.get("release") else " · разрабатываемая сборка, не релиз")
+        state = ("релиз" if app.get("release") else
+                 "кандидат, не релиз" if "-rc" in app["version"] else "разрабатываемая сборка, не релиз")
+        return app["version"] + " · " + state
     def target_text(target):
         if not target or not target.get("revision"):
             return (target or {}).get("error") or "версия неизвестна"
         channel = "релиз" if target.get("channel") == "release" else "ветка main, не релиз"
         return f"{target.get('tag') or channel} · {channel}\nCommit: {target['revision']}"
     lines = ["Linux-приложение (открытое окно): " + app_text(info.get("running_app"))]
-    lines.append("Установленная системная копия приложения: " + app_text(info["installed_app"])
-                 if info.get("installed_app") is not None else "Системная копия приложения не обнаружена.")
-    scope = "системная копия" if info.get("scope") == "installed" else "локальный checkout, не установленный сервис"
+    lines.append("Версия управляемого сервиса: " + app_text(info["installed_app"])
+                 if info.get("installed_app") is not None else "Управляемый сервис не обнаружен.")
+    scope = {"installed": "управляемый сервис", "package": "данные из пакета, сервис не установлен"}.get(
+        info.get("scope"), "локальный checkout, не установленный сервис")
     lines += ["", "Локальный набор Flowseal (" + scope + "):", target_text(info.get("current")),
               "", "Flowseal по последней сохранённой проверке:", target_text(info.get("checked"))]
     if info.get("checked", {}).get("checked_at"):

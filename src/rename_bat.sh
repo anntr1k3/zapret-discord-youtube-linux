@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 
-# Директория для обработки
-TARGET_DIR="zapret-latest"
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET_DIR="${1:-$SCRIPT_DIR/../zapret-latest}"
+if [[ ! -d "$TARGET_DIR" ]]; then
+    echo "Каталог стратегий не найден: $TARGET_DIR" >&2
+    exit 1
+fi
+TARGET_DIR="$(realpath -- "$TARGET_DIR")"
 
 # Функция для транслитерации русских символов в латинские
 transliterate() {
@@ -26,7 +33,7 @@ transliterate() {
 }
 
 # Обработка каждого .bat файла в директории
-find "$TARGET_DIR" -type f -name "*.bat" | while read -r file; do
+find "$TARGET_DIR" -type f -name "*.bat" -print0 | while IFS= read -r -d '' file; do
     dir=$(dirname "$file")
     old_name=$(basename "$file")
     

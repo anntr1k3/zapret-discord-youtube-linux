@@ -200,23 +200,52 @@ run_daemon() {
     run_zapret_command --config "$CONF_FILE"
 }
 
-# Остановка zapret (nfqws + firewall rules)
-stop_zapret() {
-    local lockdir="/tmp/.zapret-stop-${EUID:-0}.lock"
-    if ! mkdir "$lockdir" 2>/dev/null; then
-        local i=0
-        while [[ -d "$lockdir" && $i -lt 30 ]]; do
-            sleep 0.1
-            ((i++))
-        done
-        return 0
+_stop_lock_parent() {
+    if ((EUID == 0)); then
+        printf '%s\n' /run
+    elif [[ -d "/run/user/$EUID" ]]; then
+        printf '%s\n' "/run/user/$EUID"
+    else
+        printf '%s\n' "${HOME:?HOME is unset}"
     fi
-    trap 'rm -rf "$lockdir" 2>/dev/null || true' EXIT RETURN
+}
+
+_stop_lock_safe_dir() {
+    local path="$1" owner mode
+    [[ "$path" == /* && -d "$path" && ! -L "$path" ]] || return 1
+    read -r owner mode < <(stat -c '%u %a' -- "$path") || return 1
+    [[ "$owner" == "$EUID" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 8#022) == 0 ))
+}
+
+# A subshell owns the fd (no trap changes in its caller). Keep the directory
+# inode after releasing the lock so concurrent invocations always share it.
+stop_zapret() (
+    local parent lockdir lock_fd status=0
+    parent=$(_stop_lock_parent) || return 1
+    lockdir="$parent/zapret-stop"
+    [[ "$parent" == "${HOME:-}" && "$EUID" != 0 ]] && lockdir="$parent/.zapret-stop"
+    if ! _stop_lock_safe_dir "$parent"; then
+        echo "Небезопасный каталог блокировки остановки: $parent" >&2
+        return 1
+    fi
+    mkdir -m 700 -- "$lockdir" 2>/dev/null || :
+    if ! _stop_lock_safe_dir "$lockdir"; then
+        echo "Небезопасная блокировка остановки: $lockdir" >&2
+        return 1
+    fi
+    exec {lock_fd}<"$lockdir" || return 1
+    if ! flock -x -w 5 "$lock_fd"; then
+        echo "Не удалось дождаться блокировки остановки: $lockdir" >&2
+        return 1
+    fi
 
     log "Остановка nfqws..."
-    stop_nfqws
+    stop_nfqws || status=1
     log "Очистка правил файрвола..."
-    firewall_clear
-    log "Очистка завершена."
-    rm -rf "$lockdir" 2>/dev/null || true
-}
+    firewall_clear || status=1
+    if ((status == 0)); then
+        log "Очистка завершена."
+    fi
+    return "$status"
+)

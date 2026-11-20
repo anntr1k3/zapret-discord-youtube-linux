@@ -20,7 +20,7 @@ def load():
     return module
 
 
-def nft_table():
+def nft_table(*, exclude_loopback=False):
     entries = [{"table": {"family": "inet", "name": "zapretunix", "handle": 1}}]
     for name, hook, priority in (("post", "postrouting", -150), ("pre", "prerouting", 0)):
         entries.append({"chain": {"family": "inet", "table": "zapretunix", "name": name,
@@ -29,6 +29,9 @@ def nft_table():
                                                 ("post", "udp", "dport", "original", 6),
                                                 ("pre", "tcp", "sport", "reply", 3)):
         matches = []
+        if exclude_loopback:
+            matches.append({"match": {"op": "!=", "right": "lo",
+                                      "left": {"meta": {"key": "oifname" if chain == "post" else "iifname"}}}})
         if chain == "post":
             matches.append({"match": {"op": "==", "left": {"&": [{"meta": {"key": "mark"}}, 1073741824]}, "right": 0}})
         matches += [
@@ -89,6 +92,26 @@ class OwnershipTests(unittest.TestCase):
         fingerprint = self.module.inspect_table(nft_table(), self.plan, "any", active=True)
         self.assertTrue(fingerprint)
         self.assertIsNone(self.module.inspect_table({"nftables": []}, self.plan, "any", active=False))
+
+    def test_accepts_exact_loopback_exclusion_on_all_any_rules(self):
+        self.assertTrue(self.module.inspect_table(nft_table(exclude_loopback=True), self.plan, "any", active=True))
+
+    def test_does_not_adopt_partial_or_altered_loopback_exclusions(self):
+        for mutation in ("missing", "interface", "direction", "operator", "duplicate"):
+            data = nft_table(exclude_loopback=True)
+            expr = data["nftables"][-1]["rule"]["expr"]
+            if mutation == "missing":
+                del expr[0]
+            elif mutation == "interface":
+                expr[0]["match"]["right"] = "eth0"
+            elif mutation == "direction":
+                expr[0]["match"]["left"]["meta"]["key"] = "oifname"
+            elif mutation == "operator":
+                expr[0]["match"]["op"] = "=="
+            else:
+                expr.insert(0, copy.deepcopy(expr[0]))
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                self.module.inspect_table(data, self.plan, "any", active=True)
 
     def test_nft_1_0_9_single_flag_string_has_same_semantics_as_list(self):
         data = nft_table()

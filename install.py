@@ -463,7 +463,10 @@ WantedBy=multi-user.target
                 raise RuntimeError(f"Activation failed; recovery also failed: {recovery}. Inspect current/unit/state before retrying.") from error
             raise
 
-    def deploy(self, source, update=False, start=False):
+    def deploy(self, source, update=False, start=False, initial_strategy=None):
+        if initial_strategy is not None and (not isinstance(initial_strategy, str) or
+                not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.bat", initial_strategy)):
+            raise ValueError("Invalid initial strategy")
         with self.operation():
             old = self.state()
             if bool(old) != update:
@@ -473,25 +476,38 @@ WantedBy=multi-user.target
             # Never trust root's inherited TMPDIR for a privileged package snapshot.
             with package_snapshot(source, self.state_dir) as package:
                 config = self.data / "conf.env"
+                if not config.exists() and initial_strategy is not None:
+                    # Only a private snapshot is changed, never the supplied tree.
+                    atomic_write(package / "conf.env",
+                                 ("interface=any\ngamefiltertcp=false\ngamefilterudp=false\n"
+                                  f"strategy={initial_strategy}\nfirewall_backend=nftables\n").encode())
                 validate_config(config if config.exists() else package / "conf.env", package)
                 self.managed_directory(self.app)
                 self.managed_directory(self.data)
                 self.backup()
-                if not config.exists():
-                    atomic_write(config, (package / "conf.env").read_bytes(), 0o640)
-                lists = self.data / "user-lists"
-                lists.mkdir(exist_ok=True, mode=0o755)
-                initial_lists = package / "user-lists"
-                if initial_lists.is_dir():
-                    for entry in initial_lists.iterdir():
-                        if not entry.is_file() or entry.suffix != ".txt":
-                            raise ValueError("User lists must be regular .txt files")
-                        if not (lists / entry.name).exists():
-                            atomic_write(lists / entry.name, entry.read_bytes())
-                for name in USER_LISTS:
-                    if not (lists / name).exists():
-                        atomic_write(lists / name, b"")
-                self.publish(package, old, Path(__file__).read_bytes(), start)
+                created_config = not config.exists()
+                try:
+                    if created_config:
+                        atomic_write(config, (package / "conf.env").read_bytes(), 0o640)
+                    lists = self.data / "user-lists"
+                    lists.mkdir(exist_ok=True, mode=0o755)
+                    initial_lists = package / "user-lists"
+                    if initial_lists.is_dir():
+                        for entry in initial_lists.iterdir():
+                            if not entry.is_file() or entry.suffix != ".txt":
+                                raise ValueError("User lists must be regular .txt files")
+                            if not (lists / entry.name).exists():
+                                atomic_write(lists / entry.name, entry.read_bytes())
+                    for name in USER_LISTS:
+                        if not (lists / name).exists():
+                            atomic_write(lists / name, b"")
+                    self.publish(package, old, Path(__file__).read_bytes(), start)
+                except BaseException:
+                    # Preserve data if recovery failed and the candidate is still
+                    # current. Otherwise a failed first install has no new config.
+                    if created_config and not old and not os.path.lexists(self.current):
+                        config.unlink(missing_ok=True)
+                    raise
 
     def publish(self, package, old, installer_code, start=False, validator=None):
         self.releases.mkdir(exist_ok=True, mode=0o755)
@@ -576,7 +592,9 @@ WantedBy=multi-user.target
             self.backup()
             self.activate(old["previous"], old)
 
-    def remove(self):
+    def remove(self, purge=False):
+        if type(purge) is not bool:
+            raise ValueError("purge must be boolean")
         with self.operation():
             old = self.state()
             if not old:
@@ -609,6 +627,17 @@ WantedBy=multi-user.target
             self.state_file.unlink()
             for release in releases:
                 shutil.rmtree(release)
+            if purge:
+                if self.data.exists():
+                    shutil.rmtree(self.data)
+                # Never unlink the lock inode while holding it: a second
+                # operation could otherwise acquire a newly created lock.
+                for path in self.state_dir.iterdir():
+                    if path.name not in (".install.lock", ".managed"):
+                        if path.is_dir():
+                            shutil.rmtree(path)
+                        else:
+                            path.unlink()
 
 
 def main():

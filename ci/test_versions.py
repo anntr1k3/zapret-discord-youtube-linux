@@ -36,9 +36,20 @@ class VersionTests(unittest.TestCase):
 
     def test_application_version_is_explicitly_prerelease(self):
         app = self.module.application(ROOT)
-        self.assertEqual(app["version"], "1.0.0-dev")
+        self.assertEqual(app["version"], "1.0.1-rc1")
         self.assertFalse(app["release"])
         self.assertIsNone(app["error"])
+
+    def test_debian_version_follows_metadata_and_preserves_upgrade_order(self):
+        self.assertEqual(self.module.debian_version(ROOT), "1.0.1~rc1")
+        for version, stable, expected in (("1.2.3", True, "1.2.3"),
+                                          ("1.2.3-rc2", False, "1.2.3~rc2")):
+            with self.subTest(version=version):
+                self.write("src/app-version.json", {"schema": 1, "version": version, "release": stable})
+                self.assertEqual(self.module.debian_version(self.base), expected)
+        self.write("src/app-version.json", {"schema": 1, "version": "1.2.3-dev", "release": False})
+        with self.assertRaises(ValueError):
+            self.module.debian_version(self.base)
 
     def test_missing_old_application_metadata_is_unknown(self):
         app = self.module.application(self.base)
@@ -48,6 +59,7 @@ class VersionTests(unittest.TestCase):
     def test_invalid_application_schema_is_not_a_release(self):
         for data in ({"schema": 99, "version": "1.0", "release": True},
                      {"schema": 1, "version": "bad\nversion", "release": False},
+                     {"schema": 1, "version": "1.0.1-rc1", "release": True},
                      {"schema": 1, "version": "1.0.0", "release": "true"}):
             self.write("src/app-version.json", data)
             self.assertIsNone(self.module.application(self.base)["version"])
@@ -120,6 +132,7 @@ class VersionTests(unittest.TestCase):
     def test_demo_versions_track_applied_data_separately_from_app(self):
         backend = load("src/gui/backend.py").DemoBackend()
         before = backend.snapshot()["versions"]
+        self.assertEqual(before["running_app"], self.module.application(ROOT))
         backend.check_update()
         pending = backend.prepare_update()
         self.assertEqual(backend.snapshot()["versions"]["current"], before["current"])
@@ -132,10 +145,18 @@ class VersionTests(unittest.TestCase):
         presentation = load("src/gui/presentation.py")
         info = self.module.summary(ROOT, self.base, self.base, False, None)
         text = presentation.version_text(info)
-        self.assertIn("1.0.0-dev", text)
+        self.assertIn("1.0.1-rc1", text)
         self.assertIn("не релиз", text)
         self.assertIn("checkout", text)
         self.assertIn("Сравнить ревизии данных пока нельзя", text)
+
+    def test_package_catalog_without_service_is_not_described_as_checkout(self):
+        presentation = load("src/gui/presentation.py")
+        self.write("zapret-latest/.flowseal-sync.json", self.target())
+        info = self.module.summary(ROOT, self.base / "missing", self.base, False, None, packaged=True)
+        self.assertEqual(info["scope"], "package")
+        self.assertIn("данные из пакета, сервис не установлен", presentation.version_text(info))
+        self.assertIsNone(info["installed_app"])
 
     def test_different_commit_is_not_claimed_to_be_newer(self):
         presentation = load("src/gui/presentation.py")
@@ -147,7 +168,7 @@ class VersionTests(unittest.TestCase):
 
     def test_old_installed_app_does_not_inherit_checkout_version(self):
         info = self.module.summary(ROOT, self.base, self.base, True, None)
-        self.assertEqual(info["running_app"]["version"], "1.0.0-dev")
+        self.assertEqual(info["running_app"]["version"], "1.0.1-rc1")
         self.assertIsNone(info["installed_app"]["version"])
 
     def test_already_applied_pending_is_not_offered_as_unapplied(self):

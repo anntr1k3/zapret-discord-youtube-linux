@@ -142,6 +142,7 @@ def inspect_table(document, plan, interface, *, active):
         if ports:
             expected.append((chain, protocol, tuple(sorted(ports))))
     observed = []
+    loopback_policies = set()
     for kind, rule in related:
         if kind in ("table", "chain"):
             continue
@@ -154,19 +155,28 @@ def inspect_table(document, plan, interface, *, active):
             raise ValueError("Managed nft queue/verdict changed")
         chain = rule["chain"]
         matches = []
+        interface_key = {"meta": {"key": "oifname" if chain == "post" else "iifname"}}
+        excludes_loopback = False
         for item in expr[:-1]:
             if not isinstance(item, dict) or set(item) != {"match"}:
                 raise ValueError("Unknown effect in managed nft rule")
             match = item["match"]
-            if not isinstance(match, dict) or set(match) != {"op", "left", "right"} or match["op"] not in ("==", "in"):
+            if not isinstance(match, dict) or set(match) != {"op", "left", "right"}:
+                raise ValueError("Unknown managed nft match")
+            if match["op"] == "!=" and interface == "any" and not excludes_loopback \
+                    and match["left"] == interface_key and match["right"] == "lo":
+                excludes_loopback = True
+                continue
+            if match["op"] not in ("==", "in"):
                 raise ValueError("Unknown managed nft match")
             matches.append((match["left"], match["right"]))
+        loopback_policies.add(excludes_loopback)
         fixed = [({"ct": {"key": "packets", "dir": "original" if chain == "post" else "reply"}},
                   {"range": [1, 6 if chain == "post" else 3]})]
         if chain == "post":
             fixed.append(({"&": [{"meta": {"key": "mark"}}, 1073741824]}, 0))
         if interface != "any":
-            fixed.append(({"meta": {"key": "oifname" if chain == "post" else "iifname"}}, interface))
+            fixed.append((interface_key, interface))
         for pair in fixed:
             if pair not in matches:
                 raise ValueError("Managed nft match changed")
@@ -181,6 +191,8 @@ def inspect_table(document, plan, interface, *, active):
         observed.append((chain, protocols[0], tuple(sorted(port_values(right)))))
     if sorted(observed) != sorted(expected):
         raise ValueError("Managed capture rules differ from original strategy")
+    if len(loopback_policies) > 1:
+        raise ValueError("Managed rules use inconsistent loopback exclusions")
     return json.dumps(related, sort_keys=True)
 
 

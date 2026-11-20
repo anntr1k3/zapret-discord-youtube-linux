@@ -2,6 +2,12 @@
 
 set -e
 
+if [[ "$#" != 1 || "$1" != --acknowledge-disposable-vm || "$EUID" != 0 ||
+      ! -f /var/tmp/zapret-vm-provisioned || "$(hostname)" != zapret-integration ]]; then
+    echo "Тест разрешён только в отмеченной одноразовой VM с --acknowledge-disposable-vm." >&2
+    exit 2
+fi
+
 # =============================================================================
 # CI E2E тест: проверка запуска всех стратегий
 # Не использует внутренние функции - только CLI интерфейс
@@ -74,7 +80,6 @@ check_nft_rules_exist() {
 # Очистка после теста
 cleanup() {
     print_status info "Очистка..."
-    sudo pkill -f nfqws 2>/dev/null || true
     "$BASE_DIR/service.sh" kill >/dev/null 2>&1 || true
 }
 
@@ -166,7 +171,6 @@ EOF
     else
         print_status fail "nfqws всё ещё запущен после остановки"
         test_passed=false
-        sudo pkill -9 -f nfqws 2>/dev/null || true
     fi
 
     if check_nft_rules_not_exist; then

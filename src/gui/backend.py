@@ -15,6 +15,7 @@ import tempfile
 
 SERVICE = "zapret_discord_youtube.service"
 CURRENT = Path("/opt/zapret-discord-youtube/current")
+APPLICATION = Path("/usr/lib/zapret-discord-youtube")
 HOSTS = Path("/etc/hosts")
 MARKER = "zapret-system-installer-v1\n"
 
@@ -116,7 +117,13 @@ class Backend:
             return False
 
     def base(self):
-        return self.current if self.managed() else self.workspace
+        if self.managed():
+            return self.current
+        try:
+            self.trusted_bootstrap()
+            return APPLICATION / "runtime"
+        except (OSError, RuntimeError):
+            return self.workspace
 
     def profiles(self):
         base = self.base()
@@ -167,8 +174,10 @@ class Backend:
         except (OSError, ValueError, RuntimeError) as error:
             update_error, revision = str(error), None
         auto_check = self.update_checker().status()
-        versions = load_version_module().summary(self.workspace, self.current, self.base(), self.managed(),
-                                                 auto_check.get("last_check"))
+        base = self.base()
+        versions = load_version_module().summary(self.workspace, self.current, base, self.managed(),
+                                                  auto_check.get("last_check"),
+                                                  packaged=base == APPLICATION / "runtime")
         return {"installed": installed, "unit_present": props.get("LoadState") != "not-found" if not unit_error else None,
                 "active": props.get("ActiveState") == "active", "state": props.get("ActiveState", "unknown"),
                 "enabled": props.get("UnitFileState") in ("enabled", "enabled-runtime"),
@@ -186,7 +195,8 @@ class Backend:
 
     def remove_supported(self):
         try:
-            return b"# remove-service-v1:" in self.trusted_helper().read_bytes()
+            self.trusted_bootstrap()
+            return True
         except (OSError, RuntimeError):
             return False
 
@@ -365,6 +375,29 @@ class Backend:
         helper = self.trusted_helper()
         if action not in ("read-config", "read-status", "read-tcp-timestamps"):
             self.status_report = None
+        return self._helper_request(helper, action, payload)
+
+    def trusted_bootstrap(self):
+        helper = APPLICATION / "src/gui/bootstrap.py"
+        try:
+            for path in (helper, *helper.parents):
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                    raise RuntimeError("Bootstrap и его каталоги должны принадлежать root без записи группы/остальных")
+            if not helper.is_file():
+                raise RuntimeError("Bootstrap должен быть обычным файлом")
+        except OSError as error:
+            raise RuntimeError("Установите доверенный пакет приложения: bootstrap отсутствует; "
+                               "повышение прав checkout запрещено.") from error
+        return helper
+
+    def call_bootstrap(self, action, payload):
+        if action not in ("install-service", "remove-service"):
+            raise ValueError("Неизвестная операция bootstrap")
+        return self._helper_request(self.trusted_bootstrap(), action, payload)
+
+    @staticmethod
+    def _helper_request(helper, action, payload):
         result = subprocess.run(["/usr/bin/pkexec", "/usr/bin/python3", "-I", str(helper), action],
                                 input=json.dumps(payload), capture_output=True, text=True, check=False)
         if result.returncode in (126, 127):
@@ -488,7 +521,9 @@ class Backend:
     def remove_service(self, purge=False):
         if not self.managed():
             raise RuntimeError("Управляемый системный сервис не установлен")
-        result = self.call_helper("remove-service", {"purge": bool(purge)})
+        if type(purge) is not bool:
+            raise ValueError("purge должен быть boolean")
+        result = self.call_bootstrap("remove-service", {"purge": purge})
         self.loaded_config = None
         self.status_report = None
         return result
@@ -496,41 +531,15 @@ class Backend:
     def install_service(self, strategy=None, start=True):
         if self.managed():
             raise RuntimeError("Управляемый системный сервис уже установлен")
-        install_script = self.workspace / "install.py"
-        if not install_script.is_file():
-            raise RuntimeError(f"Файл {install_script} не найден в рабочем каталоге")
         if strategy is not None:
             if not isinstance(strategy, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.bat", strategy):
                 raise ValueError("Некорректное имя стратегии")
-            if strategy not in self.profiles():
-                raise ValueError(f"Стратегия {strategy} отсутствует в рабочем каталоге")
-            conf_path = self.workspace / "conf.env"
-            if conf_path.is_file():
-                old_conf = conf_path.read_bytes()
-                pattern = rb"(?m)^strategy=[^\r\n]*"
-                replacement = b"strategy=" + strategy.encode("ascii")
-                new_conf, count = re.subn(pattern, lambda _: replacement, old_conf, count=1)
-                if not count:
-                    if new_conf and not new_conf.endswith(b"\n"):
-                        new_conf += b"\n"
-                    new_conf += replacement + b"\n"
-                conf_path.write_bytes(new_conf)
-            else:
-                initial_conf = (f"interface=any\ngamefiltertcp=false\ngamefilterudp=false\n"
-                                f"strategy={strategy}\nfirewall_backend=auto\n").encode("ascii")
-                conf_path.write_bytes(initial_conf)
-        cmd = ["/usr/bin/pkexec", "/usr/bin/python3", "-I", str(install_script), "install",
-               "--source", str(self.workspace)]
-        if start:
-            cmd.append("--start")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        if result.returncode in (126, 127):
-            raise RuntimeError("Авторизация отменена или отклонена. Никакой успех не предполагается — обновите статус.")
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"Ошибка установки (код {result.returncode})")
+        if type(start) is not bool:
+            raise ValueError("start должен быть boolean")
+        result = self.call_bootstrap("install-service", {"strategy": strategy, "start": start})
         self.loaded_config = None
         self.status_report = None
-        return {"installed": True, "started": bool(start)}
+        return result
 
 
 class DemoBackend:
@@ -732,7 +741,7 @@ class DemoBackend:
         module = load_version_module()
         current = module.target_info({"revision": self.revision, "channel": "release", "tag": "1.10.4"})
         checked = module.target_info(self.last_update_check)
-        app = {"version": "1.0.0-dev", "release": False, "error": None}
+        app = {"version": "1.0.1-rc1", "release": False, "error": None}
         relation = ("same" if current["revision"] == checked["revision"] else "different") if current["revision"] and checked["revision"] else "unknown"
         return {"running_app": app, "installed_app": app, "scope": "installed", "current": current,
                 "checked": checked, "relation": relation, "source_url": module.SOURCE_URL}

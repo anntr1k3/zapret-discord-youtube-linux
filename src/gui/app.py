@@ -20,6 +20,7 @@ IPSET_LABELS = ("Выберите режим", "Загруженный спис�
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Графический интерфейс zapret")
     parser.add_argument("--demo", action="store_true", help="симуляция без системных действий")
+    parser.add_argument("--tester", action="store_true", help="открыть вкладку тестировщика (без запуска тестов)")
     parser.add_argument("--smoke-test", action="store_true", help="автопроверка окна; только с --demo")
     args = parser.parse_args(argv)
     if args.smoke_test and not args.demo:
@@ -283,6 +284,10 @@ def main(argv=None):
             scroll.set_child(self.log_view)
             page.append(scroll)
             page.append(Gtk.Label(label="Показаны только сообщения, доступные текущему пользователю.\nПустой журнал не означает отсутствие ошибок сервиса.", wrap=True, xalign=0))
+            if args.tester:
+                stack.set_visible_child_name("tester")
+                if args.smoke_test:
+                    assert stack.get_visible_child_name() == "tester"
             self.window.present()
             if args.smoke_test:
                 GLib.timeout_add_seconds(30, self.smoke_watchdog)
@@ -613,7 +618,7 @@ def main(argv=None):
             profiles = self.state.get("profiles", [])
             combo = Gtk.DropDown(model=Gtk.StringList.new(profiles))
             if profiles:
-                idx = profiles.index("general.bat") if "general.bat" in profiles else 0
+                idx = profiles.index("general_alt12.bat") if "general_alt12.bat" in profiles else 0
                 combo.set_selected(idx)
             box.append(combo)
             start_check = Gtk.CheckButton(label="Запустить и включить автозапуск сразу после установки", active=True)
@@ -627,7 +632,7 @@ def main(argv=None):
             def on_response(source, response):
                 if response == "install":
                     idx = combo.get_selected()
-                    chosen = profiles[idx] if idx < len(profiles) else (profiles[0] if profiles else "general.bat")
+                    chosen = profiles[idx] if idx < len(profiles) else None
                     start_now = start_check.get_active()
                     self.run_operation(lambda: self.backend.install_service(chosen, start=start_now), action="install-service")
             dialog.connect("response", on_response)
@@ -638,7 +643,7 @@ def main(argv=None):
             if self.busy or not self.state.get("installed"):
                 return
             dialog = Adw.AlertDialog(heading="Удаление системного сервиса",
-                                     body="Системный сервис zapret_discord_youtube будет остановлен, отключён из автозапуска и удалён из /opt/zapret-discord-youtube.\n\nМожет потребоваться авторизация администратора.")
+                                     body="Системный сервис zapret_discord_youtube будет остановлен, отключён из автозапуска и удалён из /opt/zapret-discord-youtube. Приложение и помощник сохранятся для повторной установки.\n\nМожет потребоваться авторизация администратора.")
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
             purge_check = Gtk.CheckButton(label="Удалить также пользовательские настройки (/etc/zapret-discord-youtube)", active=False)
             box.append(purge_check)
@@ -1071,7 +1076,7 @@ def main(argv=None):
                         assert not self.progress.get_reveal_child(), "progress stays visible after error"
                         assert self.pages.get_sensitive(), "pages remain disabled after error"
                         assert self.current_toast is None, "success notification shown after error"
-                        assert "1.0.0-dev" in self.version_info.get_text(), "application version missing"
+                        assert self.state["versions"]["running_app"]["version"] in self.version_info.get_text(), "application version missing"
                         assert self.state["versions"]["relation"] == "same", "data versions not refreshed after apply"
                         assert self.current_data_link.get_visible() and self.checked_data_link.get_visible(), "version links missing"
                         dialog = self.show_error_details()
